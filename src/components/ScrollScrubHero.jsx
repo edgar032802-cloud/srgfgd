@@ -1,7 +1,34 @@
 import { useEffect, useRef, useState } from "react"
 
 const FRAME_COUNT = 131
-const WINDOW = 12 // frames kept decoded either side of the current one
+
+/**
+ * 프레임을 두 벌 둔다 — 넓은 화면용 1440×810, 좁은 화면용 720×405.
+ *
+ * 한 벌만 쓰던 때는 휴대폰에서도 1440 짜리를 디코드해 **528 픽셀 폭으로** 그렸다.
+ * 쓸 픽셀의 일곱 배를 매번 풀어 헤친 셈이다. 스크롤 한 번에 프레임이 115 장쯤
+ * 바뀌는데(실측), 장당 디코드가 데스크톱에서도 3.6ms 였으니 휴대폰에서는 프레임
+ * 예산을 통째로 넘겼다. 그게 "첫 페이지가 렉 걸린다"의 정체였다.
+ *
+ * 거기에 메모리도 걸린다. 창 안에 살려 두는 열여섯 장이 1440 기준 장당 4.7MB —
+ * 75MB 다. 휴대폰에서는 이만한 이미지 메모리가 회수와 재디코드를 부르고, 그
+ * 재디코드가 다시 끊김이 된다. 720 짜리는 장당 1.2MB 라 같은 창이 14MB 로 준다.
+ */
+const FRAME_SETS = {
+  wide: { dir: "", window: 12 },
+  narrow: { dir: "m/", window: 8 },
+}
+
+/**
+ * 화면 폭이 아니라 **실제로 그려지는 폭**(장치 픽셀)으로 고른다 — paint() 가
+ * 쓰는 것과 같은 식이다. 720 짜리로 충분하면 720 을 쓴다.
+ */
+function pickSet() {
+  if (typeof window === "undefined") return FRAME_SETS.wide
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+  const drawn = Math.min(window.innerWidth * 0.94, window.innerHeight * 0.55 * (16 / 9)) * dpr
+  return drawn <= 720 ? FRAME_SETS.narrow : FRAME_SETS.wide
+}
 
 // 영상 131 장을 처음부터 끝까지 전부 건다(사용자 지시).
 //
@@ -12,7 +39,7 @@ const FIRST = 0 // f_001 — 영상의 첫 장
 const LAST = 130 // f_131 — 영상의 마지막 장
 const SPAN = LAST - FIRST
 
-const frameSrc = (i) => `/frames/f_${String(i + 1).padStart(3, "0")}.jpg`
+const frameSrc = (set, i) => `/frames/${set.dir}f_${String(i + 1).padStart(3, "0")}.jpg`
 const clamp01 = (v) => Math.min(1, Math.max(0, v))
 
 /** Average the four corners of a frame — the footage sits on a flat colour. */
@@ -51,6 +78,8 @@ function fadeOut(p, hold, end) {
  * Holding all 131 frames decoded costs ~260MB of heap and stutters the page, so
  * only a window around the current frame stays in memory; the rest are dropped
  * and re-created from the HTTP cache when scrolled back to.
+ *
+ * 좁은 화면에서는 720×405 짜리 프레임을 쓴다 — 위 FRAME_SETS 주석 참고.
  */
 export default function ScrollScrubHero({ children }) {
   const wrapRef = useRef(null)
@@ -58,6 +87,11 @@ export default function ScrollScrubHero({ children }) {
   const copyRef = useRef(null)
   const cueRef = useRef(null)
   const scrimRef = useRef(null)
+
+  // 한 번 고르면 바꾸지 않는다. 도중에 갈아타면 받아 둔 것을 버리고 131 장을
+  // 다시 받게 된다 — 화면을 돌린 정도로 치를 값이 아니다.
+  const setRef = useRef(null)
+  if (!setRef.current) setRef.current = pickSet()
 
   const imagesRef = useRef(new Array(FRAME_COUNT).fill(null))
   const lastPainted = useRef(-1)
@@ -82,7 +116,7 @@ export default function ScrollScrubHero({ children }) {
         },
         { once: true }
       )
-      img.src = frameSrc(index)
+      img.src = frameSrc(setRef.current, index)
       images[index] = img
     }
     return img
@@ -90,8 +124,9 @@ export default function ScrollScrubHero({ children }) {
 
   function trim(center) {
     const images = imagesRef.current
+    const keep = setRef.current.window
     for (let i = 0; i < FRAME_COUNT; i++) {
-      if (Math.abs(i - center) <= WINDOW) continue
+      if (Math.abs(i - center) <= keep) continue
       if (images[i]) {
         images[i].src = ""
         images[i] = null
@@ -155,7 +190,7 @@ export default function ScrollScrubHero({ children }) {
     const p = travel <= 0 ? 0 : clamp01(-rect.top / travel)
     const index = FIRST + Math.round(p * SPAN)
 
-    for (let i = index - 3; i <= index + WINDOW; i++) ensure(i)
+    for (let i = index - 3; i <= index + setRef.current.window; i++) ensure(i)
     trim(index)
 
     // No onload wiring here — ensure() already listens, and assigning it a
@@ -178,7 +213,7 @@ export default function ScrollScrubHero({ children }) {
   useEffect(() => {
     // 정리 시점에 ref 를 다시 읽지 않도록 배열을 잡아 둔다(같은 배열을 계속 쓴다).
     const images = imagesRef.current
-    for (let i = FIRST; i <= FIRST + WINDOW; i++) ensure(i)
+    for (let i = FIRST; i <= FIRST + setRef.current.window; i++) ensure(i)
 
     // Failsafe: never leave the banner permanently covered, even if a frame
     // fails to decode. A missing image is better than a blank page.
