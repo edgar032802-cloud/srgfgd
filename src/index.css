@@ -39,6 +39,10 @@
   --wrap: 1240px;
   --pad: 24px;
 
+  /* 가로로 눕히면 사파리가 글자를 제멋대로 키운다. 우리가 정한 크기를 지킨다. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+
   font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   font-synthesis: none;
   letter-spacing: normal;

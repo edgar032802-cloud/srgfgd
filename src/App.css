@@ -15,7 +15,10 @@
   width: 100%;
   max-width: var(--wrap);
   margin: 0 auto;
-  padding: 0 var(--pad);
+  /* 노치·둥근 모서리가 있는 기기에서는 그만큼 더 밀어 넣는다. 안전영역이 없는
+     기기에서는 env() 가 0 이라 var(--pad) 그대로다. */
+  padding-left: max(var(--pad), env(safe-area-inset-left));
+  padding-right: max(var(--pad), env(safe-area-inset-right));
   box-sizing: border-box;
 }
 
@@ -431,7 +434,8 @@
 /* ---------------------------------------------------------------- footer */
 
 .footer {
-  padding: 44px 0 48px;
+  /* 홈 인디케이터가 주소를 가리지 않게 아래쪽만 안전영역을 더한다. */
+  padding: 44px 0 calc(48px + env(safe-area-inset-bottom));
   background: var(--paper);
   border-top: 1px solid var(--line);
 }

@@ -68,15 +68,18 @@
   color: var(--ink-2);
 }
 
+/* **16px 아래로 내리지 말 것.** iOS 사파리는 글자가 16px 미만인 입력칸을 누르면
+   페이지를 확대해 버린다 — 이름을 치려고 눌렀는데 화면이 튀어 오르고 손으로
+   다시 줄여야 한다. 시각적으로 커 보여도 이 한 줄이 모바일 체감을 가른다. */
 .field input {
-  height: 48px;
+  height: 50px;
   padding: 0 14px;
   border: 0;
   border-radius: var(--r);
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--line);
   font: inherit;
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ink);
 }
 
@@ -257,7 +260,7 @@
 }
 
 .admin__ghost {
-  height: 38px;
+  height: 44px; /* 손가락으로 누르는 최소 크기 */
   padding: 0 16px;
   border: 0;
   border-radius: var(--r-btn);
@@ -322,15 +325,15 @@
 }
 
 .admin__notify input {
-  width: 150px;
-  height: 34px;
+  width: 160px;
+  height: 44px;
   padding: 0 12px;
   border: 0;
   border-radius: var(--r);
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--line);
   font: inherit;
-  font-size: 13px;
+  font-size: 16px; /* iOS 확대 방지 */
 }
 
 .admin__notify em {
@@ -349,7 +352,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 46px;
+  height: 50px;
   padding: 0 16px;
   border-radius: var(--r-btn);
   background: var(--card);
@@ -364,10 +367,11 @@
 .find__box input {
   flex: 1 1 auto;
   min-width: 0;
+  height: 100%;
   border: 0;
   background: none;
   font: inherit;
-  font-size: 15px;
+  font-size: 16px; /* iOS 확대 방지 — 위 .field input 주석 참고 */
   color: var(--ink);
 }
 
@@ -544,7 +548,7 @@
 }
 
 .admin__done {
-  height: 38px;
+  height: 44px;
   padding: 0 18px;
   border: 0;
   border-radius: var(--r-btn);

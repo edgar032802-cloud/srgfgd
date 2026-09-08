@@ -75,8 +75,81 @@
   pointer-events: none;
 }
 
-.game__best {
+/* ------------------------------------------------------------------ 기록 칸 */
+
+/* 프레임 안 HUD 는 달리는 동안에만 보이고 지면 띠에 얹혀 작다. 최고 기록은
+   "내가 얼마나 잘했나"를 보는 숫자라 프레임 밖에 자기 자리를 준다. */
+.record {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.record__cell {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+  border-radius: var(--r);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+/* 최고 기록만 노란 면. 두 칸 중 어느 쪽을 보라는 것인지 한눈에 갈린다. */
+.record__cell--best {
+  background: var(--reel);
+  box-shadow: none;
+}
+
+/* 방금 경신했으면 테두리 한 줄로만 표시한다. 깜빡이거나 튀지 않는다. */
+.record__cell--best.is-new {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.record__label {
+  font-size: 12px;
   color: var(--ink-3);
+}
+
+.record__cell--best .record__label {
+  color: var(--ink-2);
+}
+
+.record__value {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.record__value em {
+  margin-left: 2px;
+  font-size: 15px;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+.record__note {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-3);
+  text-align: center;
+  word-break: keep-all;
+}
+
+/* 게임 오버 화면의 신기록 배지 */
+.game__new {
+  margin-left: 8px;
+  padding: 3px 10px;
+  border-radius: var(--r-btn);
+  background: var(--accent);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  color: #241a05;
+  vertical-align: 2px;
 }
 
 .game__overlay {
@@ -156,11 +229,21 @@
     font-size: 14px;
   }
 
+  /* 손가락으로 누르는 버튼은 44px 아래로 내리지 않는다. 프레임이 232px 로
+     넉넉해진 뒤로는 줄일 이유도 없다. */
   .game__btn {
-    height: 38px;
-    min-width: 104px;
-    padding: 0 20px;
-    font-size: 12px;
+    height: 44px;
+    min-width: 120px;
+    padding: 0 22px;
+    font-size: 13px;
+  }
+
+  .record__cell {
+    padding: 12px 14px;
+  }
+
+  .record__value {
+    font-size: 24px;
   }
 
   .game__hint {

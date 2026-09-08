@@ -273,10 +273,21 @@ function isInteractiveTarget(t) {
   )
 }
 
-/** localStorage는 던질 수 있다. 최고 기록을 못 남겨도 게임은 살아야 한다. */
+/**
+ * 최고 기록은 **이 기기의 브라우저에만** 남는다(localStorage). 서버로 보내지
+ * 않으므로 다른 사람 것과 섞이지 않고, 방문자 기록을 우리가 들고 있지도 않다.
+ *
+ * localStorage 는 던질 수 있다 — 사파리 비공개 모드, 사이트 데이터 차단 등.
+ * 그때도 게임은 그대로 돌아가야 하므로 실패를 삼키되, **성공 여부는 돌려준다.**
+ * 화면에 "이 기기에 저장됩니다"라고 적어 두고 실제로는 안 되고 있으면 거짓말이
+ * 되기 때문이다.
+ */
+const BEST_KEY = "terryRunBest"
+
 function readBest() {
   try {
-    return Number(localStorage.getItem("terryRunBest") || 0)
+    const n = Number(localStorage.getItem(BEST_KEY) || 0)
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
   } catch {
     return 0
   }
@@ -284,9 +295,21 @@ function readBest() {
 
 function writeBest(value) {
   try {
-    localStorage.setItem("terryRunBest", String(value))
+    localStorage.setItem(BEST_KEY, String(value))
+    return true
   } catch {
-    // 저장소를 쓸 수 없다 — 이번 세션의 메모리 값만 유지한다.
+    return false
+  }
+}
+
+/** 저장소를 쓸 수 있는 브라우저인지 미리 한 번 본다(안내 문구를 고르기 위해). */
+function storageWorks() {
+  try {
+    localStorage.setItem("__t", "1")
+    localStorage.removeItem("__t")
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -297,6 +320,15 @@ export default function TerryRun() {
   const [status, setStatus] = useState("ready") // ready | running | over
   const [score, setScore] = useState(0)
   const [best, setBest] = useState(readBest)
+  /** 방금 끝난 판이 기록을 갈아치웠는가. 게임을 다시 시작하면 내린다. */
+  const [isRecord, setIsRecord] = useState(false)
+  const [canSave] = useState(storageWorks)
+  // 루프 안에서 지금 최고 기록을 읽어야 하는데, 상태를 그대로 쓰면 예전 값이
+  // 잡힌다(클로저). 참조로 따로 들고 다닌다.
+  const bestRef = useRef(best)
+  useEffect(() => {
+    bestRef.current = best
+  }, [best])
   // 게임이 화면에 보일 때만 키보드를 받는다. 안 그러면 페이지 어디서든
   // 스페이스가 스크롤 대신 보이지 않는 게임을 시작시킨다.
   const inViewRef = useRef(false)
@@ -350,6 +382,7 @@ export default function TerryRun() {
       t: 0,
     }
     setScore(0)
+    setIsRecord(false)
   }, [])
 
   const jump = useCallback(() => {
@@ -500,10 +533,12 @@ export default function TerryRun() {
           if (hit) break
         }
         if (hit) {
+          const m = Math.floor(s.distance / 6.3)
           setStatus("over")
+          setIsRecord(m > bestRef.current && m > 0)
           setBest((b) => {
-            const next = Math.max(b, Math.floor(s.distance / 6.3))
-            writeBest(next)
+            const next = Math.max(b, m)
+            if (next !== b) writeBest(next)
             return next
           })
         }
@@ -553,14 +588,17 @@ export default function TerryRun() {
         <div className="game__frame" ref={wrapRef}>
           <canvas ref={canvasRef} className="game__canvas" aria-label="테리 달리기 게임" />
 
+          {/* 달리는 동안에는 지금 거리만. 최고 기록은 아래 칸이 맡는다. */}
           <div className="game__hud">
             <span>{String(score).padStart(5, "0")}</span>
-            <span className="game__best">HI {String(best).padStart(5, "0")}</span>
           </div>
 
           {status !== "running" ? (
             <div className="game__overlay">
-              <p>{status === "over" ? `${score}m` : "테리와 달려보세요"}</p>
+              <p>
+                {status === "over" ? `${score}m` : "테리와 달려보세요"}
+                {status === "over" && isRecord ? <em className="game__new">신기록</em> : null}
+              </p>
               <button className="game__btn" type="button" onClick={jump}>
                 {status === "over" ? "다시 하기" : "시작하기"}
               </button>
@@ -568,6 +606,30 @@ export default function TerryRun() {
             </div>
           ) : null}
         </div>
+
+        {/* 기록 칸. 프레임 안 HUD 는 달리는 중에만 보이고 글씨도 작아서,
+            최고 기록은 프레임 밖에 자기 자리를 갖는다. */}
+        <div className="record">
+          <div className="record__cell">
+            <span className="record__label">이번 기록</span>
+            <strong className="record__value">
+              {score}
+              <em>m</em>
+            </strong>
+          </div>
+          <div className={`record__cell record__cell--best ${isRecord ? "is-new" : ""}`}>
+            <span className="record__label">최고 기록{isRecord ? " · 방금 경신" : ""}</span>
+            <strong className="record__value">
+              {best}
+              <em>m</em>
+            </strong>
+          </div>
+        </div>
+        <p className="record__note">
+          {canSave
+            ? "최고 기록은 이 기기에만 저장됩니다. 다시 와도 남아 있어요."
+            : "이 브라우저에서는 기록이 저장되지 않습니다(비공개 모드 등). 이번 판에서만 보입니다."}
+        </p>
       </div>
     </section>
   )
