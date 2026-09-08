@@ -1,0 +1,126 @@
+/**
+ * 디자인 토큰.
+ *
+ * 밝은 배경 하나(paper)와 연한 갈색(brown), 서체 하나(Pretendard 400/700),
+ * 텍스트 검정 3단, 강조색 하나(프리지아 노랑 — 면·선에만), 그라데이션 없음.
+ * --reel 은 히어로 영상 프레임의 평면색이라 히어로와 테리 돌려보기 섹션에만 쓴다.
+ */
+:root {
+  color-scheme: light;
+
+  --paper: #f5f2ee; /* 기본 섹션 */
+  --brown: #efe5d8; /* 유래 · 아큐 · 놀아보기 */
+  --reel: #faf6c9; /* 히어로 프레임 모서리색 — 테리 돌려보기도 같은 색 */
+  --card: #ffffff;
+
+  --ink: #14110f;
+  --ink-2: #6b625a;
+  --ink-3: #9a938b;
+  --ink-inv: #f5f2ee;
+
+  --line: rgba(20, 17, 15, 0.13);
+  --line-soft: rgba(20, 17, 15, 0.07);
+  --fill: rgba(20, 17, 15, 0.05);
+
+  --accent: #e3a21f;
+  --accent-ink: #17120f;
+
+  /**
+   * 모서리.
+   *
+   * 참고한 한국 커머스들은 2~6px 로 거의 굴리지 않았지만, 사용자가 "버튼 아직도
+   * 네모남, 모서리 둥글게"라고 두 번 물렸다. 버튼·칩은 완전히 둥근 알약으로,
+   * 무대와 카드 같은 면은 그보다 훨씬 작게 굴려 둘이 서로 다른 종류임을 남긴다.
+   */
+  --r: 12px;
+  --r-lg: 16px;
+  --r-btn: 999px;
+
+  --wrap: 1240px;
+  --pad: 24px;
+
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-synthesis: none;
+  letter-spacing: normal;
+}
+
+@font-face {
+  font-family: Pretendard;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/Pretendard-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Pretendard;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/Pretendard-Bold.woff2") format("woff2");
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+/* 가로 스크롤 금지. iOS Safari 는 html 에도 같은 규칙이 없으면 body 의 overflow-x 를
+   무시한다. clip 은 스크롤 컨테이너를 만들지 않아 sticky 히어로에 영향이 없다. */
+html,
+body {
+  overflow-x: clip;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.62;
+  font-weight: 400;
+}
+
+h1,
+h2,
+h3,
+p,
+figure,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+/* 강조색은 면·선 전용이라 포커스 링도 검정으로 — 노란 링은 배지와 헷갈린다. */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}

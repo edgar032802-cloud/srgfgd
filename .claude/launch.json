@@ -1,0 +1,63 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "프리지아",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "wackpuball",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "wackpuball",
+        "run",
+        "dev"
+      ],
+      "port": 5199,
+      "autoPort": true
+    },
+    {
+      "name": "wackpuball-gpu",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "wackpuball-gpu",
+        "run",
+        "dev"
+      ],
+      "port": 5200,
+      "autoPort": true
+    },
+    {
+      "name": "squishy",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "wackpuball",
+        "run",
+        "dev"
+      ],
+      "port": 5211,
+      "autoPort": true
+    },
+    {
+      "name": "wackpuball-wax",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "wackpuball-wax",
+        "run",
+        "dev"
+      ],
+      "port": 5300,
+      "autoPort": true
+    }
+  ]
+}

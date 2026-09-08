@@ -1,0 +1,174 @@
+/**
+ * 테리와 함께 달리기 — 섹션 · 프레임 · HUD · 오버레이.
+ *
+ * 게임에 관한 스타일은 전부 여기에 둔다(App.css의 .game* 규칙은 site가 제거).
+ * 토큰은 index.css의 것을 그대로 쓴다. 배경은 전부 단색, 그라데이션 없음.
+ */
+
+.game {
+  padding: 104px 0 112px;
+  /* 놀아보기 섹션 안에 놓이므로 같은 연갈색 바탕을 쓴다. */
+  background: var(--brown);
+}
+
+.game__title {
+  font-size: clamp(22px, 2.8vw, 32px);
+  line-height: 1.25;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.game__frame {
+  position: relative;
+  border-radius: var(--r);
+  overflow: hidden;
+  /* 가로 420 단위 세계를 어떤 비율의 상자에 담을지. 지면선은 상자 아래에서
+     재므로 세로를 늘리면 하늘만 늘어난다 — 물리는 그대로다.
+     데스크톱은 납작하게(224 단위 — 점프 꼭대기 182 단위 위로 한 뼘 남긴다).
+     폭이 지나치게 넓어지면 상자가 화면을 삼키므로 1000px 에서 멈춘다. */
+  width: min(100%, 1000px);
+  margin-inline: auto;
+  aspect-ratio: 420 / 224;
+  background: #f7f5f1;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 헤어라인은 캔버스 위에 올려야 보인다 (inset 그림자는 자식 밑에 깔린다) */
+.game__frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+}
+
+.game__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #f7f5f1;
+}
+
+/* 지면선 아래 GROUND_BAND(22 단위 = 데스크톱 프레임 높이의 9.8%) 띠는 옅은 점만 그려지는 빈 영역이다.
+   HUD는 그 띠에 세로 중앙으로 둔다 — 프레임 상단 72px은 비운다(고정 브랜드 마크·내비). */
+.game__hud {
+  position: absolute;
+  right: 14px;
+  top: auto;
+  bottom: 0;
+  height: 9.8%;
+  align-items: center;
+  line-height: 1;
+  display: flex;
+  gap: 14px;
+  /* 서체는 한 벌 — 점수 자리폭은 tabular-nums로 고정한다. */
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.game__best {
+  color: var(--ink-3);
+}
+
+.game__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(247, 245, 241, 0.86);
+  color: var(--ink);
+}
+
+.game__overlay p {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.game__btn {
+  height: 46px;
+  min-width: 128px;
+  padding: 0 26px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--ink);
+  color: var(--ink-inv);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* .cta와 같은 CTA 규칙: hover #2a2420, active #000 */
+.game__btn:hover {
+  background: #2a2420;
+}
+
+.game__btn:active {
+  background: #000;
+}
+
+.game__hint {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 720px) {
+  .game {
+    padding: 76px 0 84px;
+  }
+
+  .game__title {
+    margin-bottom: 24px;
+  }
+
+  /* 세로로 더 길게 준다(260 단위). 좁은 화면에서는 폭이 배율을 정해 상자가
+     납작해지는데, 지면선을 아래에서 재므로 세로를 늘려도 하늘만 늘어난다 —
+     보이는 세계의 **넓이**는 그대로여서 PC 와 난이도가 어긋나지 않는다.
+     좌우 여백도 없애 폭을 끝까지 쓴다. */
+  .game__frame {
+    width: auto;
+    aspect-ratio: 420 / 260;
+    margin-inline: calc(var(--pad) * -1);
+    border-radius: 0;
+  }
+
+  /* 지면 띠가 프레임에서 차지하는 비율도 그만큼 얇아진다(22/260). */
+  .game__hud {
+    height: 8.5%;
+  }
+
+  /* 프레임이 얇아지므로 덮개 안의 것들도 같이 줄인다. */
+  .game__overlay {
+    gap: 6px;
+  }
+
+  .game__overlay p {
+    font-size: 14px;
+  }
+
+  .game__btn {
+    height: 38px;
+    min-width: 104px;
+    padding: 0 20px;
+    font-size: 12px;
+  }
+
+  .game__hint {
+    display: none;
+  }
+
+  .game__hud {
+    right: 10px;
+    font-size: 11px;
+  }
+}

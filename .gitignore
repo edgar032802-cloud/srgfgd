@@ -1,0 +1,58 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# secrets
+.env
+
+# 부스 예약 기록 — 이름·전화번호가 들어 있다. 행사 후 삭제할 것.
+server/data/
+
+# ── 비밀값 ──────────────────────────────────────────────────────
+# .env 뿐 아니라 .env.local · .env.example 까지 통째로 막는다.
+# 견본에 진짜 키가 섞여 들어가는 사고가 가장 흔하다. 변수 목록은 docs/ENV.md 에 있다.
+.env*
+
+# ── 깃허브에 올리지 않는 무거운 것들 ────────────────────────────
+# Tripo 스캔 원본. 파일 하나가 53~68MB 라 깃허브 한도(100MB)에 닿는다.
+# 배포에 필요한 것은 이미 압축해 public/models/ 에 들어 있다.
+models-src/
+
+# 이 사이트와 무관한 옆 프로젝트들. wackpuball/tools 만 GLB 압축에 쓰므로 남긴다.
+wackpuball/*
+!wackpuball/tools/
+wackpuball-gpu/
+wackpuball-wax/
+
+# 쓰지 않는 원본 영상 (docs/BRIEF.md 에 "쓰지 않는다"로 적혀 있다)
+public/video/
+UKER6097.MP4
+
+# 잘못된 명령이 남긴 찌꺼기
+--output
+
+# 에이전트 도구 설정. launch.json 만 이 프로젝트의 것이라 남긴다.
+.claude/*
+!.claude/launch.json
+skills-lock.json

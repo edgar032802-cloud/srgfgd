@@ -1,0 +1,1021 @@
+/**
+ * 프리지아 — 한 장짜리 페이지.
+ *
+ * 히어로(스크롤 스크럽, reel) → 캐릭터(paper) → 유래(brown) → 제작(paper)
+ * → 아큐 돌려보기(brown) → 테리 돌려보기(reel) → 놀아보기(brown: 말랑이 + 달리기)
+ * → 굿즈(paper) → 푸터(paper, 상단 헤어라인).
+ *
+ * 단색 배경, Pretendard 400/700, 자간 normal, 라운드 4px, 카드 대신 헤어라인,
+ * 강조색은 배지·밑줄·색 칩·5px 점에만. 달리기 게임(.game*)은 terry-run.css 가 가진다.
+ */
+
+/* ---------------------------------------------------------------- layout */
+
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0 var(--pad);
+  box-sizing: border-box;
+}
+
+/* 고정 브랜드 마크 밑으로 제목이 파고들지 않게 — 모든 앵커 공통 */
+[id] {
+  scroll-margin-top: 72px;
+}
+
+/* 섹션 공통: 상 96 / 하 112, 소제목 → 제목 → 리드 */
+.sec {
+  padding: 96px 0 112px;
+  background: var(--paper);
+}
+
+.sec__head {
+  max-width: 640px;
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.sec__title {
+  margin-top: 8px;
+  font-size: clamp(22px, 2.8vw, 32px);
+  line-height: 1.25;
+  font-weight: 700;
+  word-break: keep-all;
+}
+
+.sec__lead {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ink-2);
+  word-break: keep-all;
+}
+
+/* 텍스트 링크: 글자는 검정 그대로, hover 에 밑줄만 노랗게 두꺼워진다 */
+.link {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.link:hover {
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+}
+
+/* ------------------------------------------------------------- brandmark */
+
+/* 상단 정중앙 고정. 배경 없이 multiply 로 곱해져 어떤 밝은 면 위에서도 읽힌다. */
+.brandmark {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 10px;
+  border-radius: var(--r);
+  background: transparent;
+  mix-blend-mode: multiply;
+  text-decoration: none;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink-3);
+  transition: color 0.2s, transform 0.28s ease, opacity 0.28s ease;
+}
+
+.brandmark img {
+  width: 30px;
+  height: auto;
+}
+
+/* 내려갈 때는 위로 물러난다. 배경을 깔지 않고 본문과의 충돌을 없애는 방법이다. */
+.brandmark.is-away {
+  transform: translateX(-50%) translateY(-72px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.brandmark:hover {
+  color: var(--ink-2);
+}
+
+/* ----------------------------------------------------------- hero scrub */
+
+/* 스크롤 자체가 재생이다. 100svh 를 스티키가 쓰고 남은 100svh 가 재생 구간 —
+   109 프레임을 화면 한 장 높이에 걸쳐 넘기므로 끊김 없이 이어진다. */
+.hero-scrub {
+  position: relative;
+  height: 200svh;
+  margin: 0;
+}
+
+/* 영상 자체의 평평한 배경색(--reel). 부팅 커버·레터박스·스크림을 전부 이 색으로
+   맞춰야 배너가 켜지는 순간 다른 색이 번쩍이지 않는다. */
+.hero-scrub__sticky {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+  overflow: hidden;
+  background: var(--reel);
+}
+
+.hero-scrub__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hero-scrub__boot {
+  position: absolute;
+  inset: 0;
+  background: var(--reel);
+  z-index: 1;
+}
+
+/* 단색 + opacity. 그라데이션은 쓰지 않는다. */
+.hero-scrub__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--reel);
+  opacity: 0;
+  z-index: 2;
+}
+
+/* 그림과 제목이 한 덩어리로 화면 가운데 놓인다. 그림의 아래끝(--hero-copy-top)은
+   캔버스가 매 프레임 알려 주므로 화면 비율이 어떻든 둘이 붙어 있다. */
+.hero-scrub__copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--hero-copy-top, 58%);
+  z-index: 3;
+  padding: 0 var(--pad);
+  box-sizing: border-box;
+  text-align: center;
+  will-change: transform, opacity;
+}
+
+.hero__title {
+  font-size: clamp(38px, 7vw, 84px);
+  line-height: 1.05;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* 한글 한 단어 + 1px 세로선 */
+.hero-scrub__cue {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.hero-scrub__cue i {
+  display: block;
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+}
+
+/* ----------------------------------------------------------------- badge */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: var(--r-btn);
+  background: var(--fill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+/* 강조색이 면으로 나오는 자리 — 한 화면에 두 개를 넘기지 않는다 */
+.badge--live {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* 버튼 공통(무대 컨트롤·상품 페이지). 인셋 헤어라인, 44px */
+.btn {
+  border-radius: var(--r-btn);
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ------------------------------------------------- 활동 페이지 공용: 태그 · 근거 목록 */
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.tags li {
+  border-radius: var(--r-btn);
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: var(--r);
+  background: var(--fill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+/* 한 열짜리 편집 목록: 레일 120 + 본문. 3열·번호 없음. */
+.notes {
+  border-top: 1px solid var(--line-soft);
+}
+
+.note-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 24px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.note-row__rail {
+  padding-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.note-row h3 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.note-row p {
+  margin-top: 6px;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ink-2);
+  word-break: keep-all;
+}
+
+/* ----------------------------------------------------------------- model */
+
+.model {
+  padding: 80px 0 96px;
+}
+
+.model--brown {
+  background: var(--brown);
+}
+
+/* 테리 — 히어로 프레임과 완전히 같은 색 */
+.model--reel {
+  background: var(--reel);
+}
+
+.model__title {
+  font-size: clamp(24px, 3.2vw, 36px);
+  line-height: 1.2;
+  font-weight: 700;
+  text-align: center;
+  word-break: keep-all;
+}
+
+/* 상자도 테두리도 없다 — 캐릭터가 섹션 바탕 위에 그대로 선다. */
+.model__stage {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  aspect-ratio: 1 / 1;
+  margin: 8px auto 0;
+}
+
+/* 돌릴 수 있다는 건 커서로만 알린다 — 문장은 제목뿐이다 */
+.c3d {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.c3d:active {
+  cursor: grabbing;
+}
+
+/* 캔버스 인라인 스타일의 touch-action: auto 를 이겨야 세로 스와이프가
+   페이지 스크롤로 넘어간다. 가로 드래그는 그대로 회전에 쓰인다. */
+.c3d canvas {
+  touch-action: pan-y !important;
+}
+
+.c3d__bar {
+  width: 120px;
+  height: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.c3d__bar span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  transition: width 0.2s;
+}
+
+/* 조작 둘을 한 덩어리로. 가운데 하나만 놓여 모델의 받침처럼 읽힌다. */
+.model__controls {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+/* 한 덩어리 안에 칸을 고르게 나눈 조작판. 선택된 칸만 잉크로 채워진다. */
+.segmented {
+  display: inline-flex;
+  border-radius: var(--r-btn);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.segmented button {
+  min-width: 124px;
+  height: 48px;
+  padding: 0 20px;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-2);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.segmented button + button {
+  box-shadow: inset 1px 0 0 var(--line);
+}
+
+.segmented button:hover {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+/* 손끝이 닿는 순간의 반응. 색만 바뀌면 눌렀는지 알기 어렵다. */
+.segmented button:active {
+  background: rgba(20, 17, 15, 0.1);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--ink-inv);
+  box-shadow: none;
+}
+
+.segmented button[aria-pressed="true"]:hover {
+  background: #2a2420;
+}
+
+.segmented button[aria-pressed="true"] + button {
+  box-shadow: none;
+}
+
+/* 선택은 면이 아니라 밑줄로 표시한다 — 버튼 세 개가 나란히 칠해지면 무겁다. */
+
+/* 스와치도 원이 아니라 --r 사각 */
+
+/* 면 없는 글자 버튼. 시각은 12px 이지만 히트 영역은 44px 를 채운다. */
+
+/* ---------------------------------------------------------------- footer */
+
+.footer {
+  padding: 44px 0 48px;
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+
+/* 주소는 학생회 줄에 바짝 붙인 한 줄. 이름·학생회·주소가 한 덩어리로 읽혀야 하는데
+   6px 을 띄우면 주소만 따로 떨어져 보였다. 좁은 화면에서 두 줄로 접히지 않게
+   글자 크기를 화면 폭에 맡기고 줄바꿈은 막는다. */
+.footer__address {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-style: normal;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.footer__brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* 다섯 번 누르면 운영자 입구가 열린다(Footer.jsx). 티는 내지 않되, 누르는
+   동안 글자가 잡히지 않도록 선택만 막는다. */
+.footer__brand img {
+  width: 34px;
+  height: 34px;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.footer__brand strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.footer__brand span {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+/* 보이는 높이는 40px 그대로, 탭 타깃만 44px 로 넓힌다 (모바일에선 유일한 섹션 내비) */
+
+/* --------------------------------------------------------------- product */
+
+.shell {
+  padding: 108px 0 96px;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding-left: var(--pad);
+  padding-right: var(--pad);
+  box-sizing: border-box;
+}
+
+.shell__back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 20px;
+  font-size: 12px;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+
+.shell__back:hover {
+  color: var(--ink);
+}
+
+.product {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 56px;
+  align-items: start;
+}
+
+.product__visual {
+  position: relative;
+  background: #f7f5f1;
+  border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+
+.product__info h1 {
+  margin: 14px 0 0;
+  font-size: clamp(26px, 3.2vw, 36px);
+  font-weight: 700;
+}
+
+.product__tagline {
+  margin-top: 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+  word-break: keep-all;
+}
+
+.product__box {
+  margin-top: 28px;
+  padding: 24px;
+  background: var(--card);
+  border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+/* 한글 소제목 — 대문자·자간 없음 */
+.product__box h2 {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.contents {
+  margin-top: 12px;
+}
+
+.contents li {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+
+.price-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 9px 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.price-row--total {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.price-row--total strong {
+  font-size: 20px;
+}
+
+/* CTA 는 검정 면. 강조색 배경은 쓰지 않는다. */
+.cta {
+  border-radius: var(--r-btn);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 48px;
+  margin-top: 18px;
+  border: 0;
+  border-radius: var(--r);
+  background: var(--ink);
+  color: var(--ink-inv);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.cta:hover:not(:disabled) {
+  background: #2a2420;
+}
+
+.cta:active:not(:disabled) {
+  background: #000;
+}
+
+.cta:disabled {
+  background: var(--fill);
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.cta--sm {
+  width: auto;
+  height: 44px;
+  padding: 0 20px;
+  display: inline-flex;
+}
+
+.note {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.7;
+}
+
+/* 오류도 팔레트 안에서 — 글자는 ink, 면은 fill, 인셋 라인으로만 구분(role="alert" 가 알린다) */
+.error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.ghost-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 6px;
+}
+
+.soon-copy {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.8;
+}
+
+/* ---------------------------------------------------------------- result */
+
+.result {
+  max-width: 460px;
+  margin: 40px auto;
+  padding: 36px;
+  background: var(--card);
+  border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  text-align: center;
+}
+
+.result h1 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.result .lede {
+  margin-top: 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.receipt {
+  margin: 24px 0 8px;
+  text-align: left;
+  border-top: 1px solid var(--line-soft);
+}
+
+.receipt div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.receipt dt {
+  color: var(--ink-3);
+}
+
+.receipt dd {
+  margin: 0;
+  font-weight: 700;
+  word-break: break-all;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 오류 코드 — 모노 서체 대신 탭 숫자 */
+.code-chip {
+  border-radius: var(--r-btn);
+  display: inline-block;
+  margin-top: 12px;
+  padding: 5px 10px;
+  border-radius: var(--r);
+  background: var(--fill);
+  font-size: 11px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  margin: 22px auto 0;
+  border: 2px solid var(--line);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brandmark {
+    transition: none;
+  }
+
+  .spinner {
+    animation-duration: 2s;
+  }
+}
+
+/* --------------------------------------------------------------- narrow */
+
+@media (max-width: 1000px) {
+  .product {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+
+}
+
+@media (max-width: 720px) {
+  :root {
+    /* 글이 화면 가장자리에 붙지 않게. 22px 도 아직 답답하다고 해서 한 칸 더. */
+    --pad: 24px;
+  }
+
+  .brandmark {
+    top: 12px;
+    font-size: 15px;
+  }
+
+  .brandmark img {
+    width: 25px;
+  }
+
+  /* 좁은 화면일수록 위아래 여백이 화면의 숨통이다. 데스크톱보다 오히려 넉넉하게. */
+  .sec {
+    padding: 96px 0 104px;
+  }
+
+  .sec__title,
+  .model__title {
+    font-size: 26px;
+    line-height: 1.3;
+  }
+
+  .note-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 18px 0;
+  }
+
+  .model {
+    padding: 88px 0 100px;
+  }
+
+  /* 무대를 조금 더 크게. 컨트롤이 한 줄이라 화면에 같이 들어온다. */
+  .model__stage {
+    max-height: 62svh;
+    margin-top: 4px;
+  }
+
+  .model__controls {
+    margin-top: 18px;
+  }
+
+  /* 두 칸이 화면 폭을 나눠 갖는다 — 가운데 조그맣게 뭉쳐 있으면 누르기 어렵다. */
+  .segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 12px;
+  }
+
+  /* 로고 옆 세 줄이 화면 폭을 넘지 않게. 주소만 한 줄로 눌러 담는다. */
+  .footer__address {
+    font-size: clamp(9.5px, 2.8vw, 12px);
+  }
+
+  .shell {
+    padding-top: 84px;
+  }
+
+  .result {
+    padding: 28px 20px;
+  }
+}
+
+/* 세로 화면에서는 16:9 그림이 작아지므로 재생 구간만 조금 줄인다. 배치는 같다. */
+@media (max-aspect-ratio: 1 / 1) and (max-width: 760px) {
+  .hero-scrub {
+    height: 170svh;
+  }
+}
+
+/* 근거 목록은 왼쪽 열 안에 있다 — 태그와 붙지 않게 간격만 준다. */
+
+/* ------------------------------------------------------------- activities */
+
+.activities__title {
+  margin-bottom: 36px;
+}
+
+/* 고르는 화면이라 칸마다 카드로 띄운다. 누를 수 있다는 게 먼저 보여야 한다. */
+/* 감각 활동은 넷이 한 세트다. 3열에 넣으면 3+1 로 갈라져 넷째만 따로 노는 것처럼
+   보였다 — 네 칸을 한 줄에 세우고, 성격이 다른 게임과 인스타그램이 아래에서 한 줄씩
+   통째로 쓴다. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tiles__wide {
+  grid-column: 1 / -1;
+}
+
+.tile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 116px;
+  padding: 24px 26px;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+  text-decoration: none;
+  transition: background-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+/* 살짝 들리고 테두리가 진해진다. 그림자를 깔지 않고 헤어라인만 쓴다. */
+.tile:hover {
+  transform: translateY(-2px);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.tile:active {
+  transform: translateY(0);
+  background: var(--fill);
+}
+
+/* 인스타그램 칸만 잉크 면 — 사이트 밖으로 나가는 유일한 링크다. */
+.tile--insta {
+  background: var(--ink);
+  box-shadow: none;
+  color: var(--ink-inv);
+  min-height: 96px;
+}
+
+.tile--insta:hover {
+  background: #2a2420;
+  box-shadow: none;
+}
+
+.tile--insta .tile__label {
+  color: rgba(245, 242, 238, 0.62);
+}
+
+.tile--insta .tile__title {
+  color: var(--ink-inv);
+}
+
+.tile__icon {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  width: 26px;
+  height: 26px;
+  color: var(--ink-inv);
+}
+
+.tile__label {
+  grid-column: 1;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+
+.tile__title {
+  grid-column: 1;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--ink);
+  word-break: keep-all;
+}
+
+/* 화살표는 제목 오른쪽에 붙어 두 줄을 함께 받는다. */
+.tile__go {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: center;
+  font-size: 16px;
+  color: var(--ink-3);
+  transition: transform 0.15s, color 0.15s;
+}
+
+.tile:hover .tile__go {
+  transform: translateX(3px);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------- activity page */
+
+.activity__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.activity__title {
+  margin-top: 8px;
+  font-size: clamp(24px, 3.2vw, 36px);
+  line-height: 1.2;
+  font-weight: 700;
+  word-break: keep-all;
+}
+
+.activity__pending {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.activity__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+  gap: 56px;
+  align-items: start;
+  margin-top: 32px;
+}
+
+.activity__figure img {
+  width: 100%;
+  height: auto;
+  max-width: 320px;
+  margin-left: auto;
+  aspect-ratio: 520 / 550;
+}
+
+@media (max-width: 1000px) {
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .activity__body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+
+  .activity__figure img {
+    max-width: 240px;
+    margin-inline: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .activities__title {
+    margin-bottom: 24px;
+  }
+
+  .tiles {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .tile {
+    min-height: 0;
+    padding: 20px 22px;
+    gap: 6px 12px;
+  }
+
+  .tile--insta {
+    min-height: 0;
+  }
+
+  .tile__title {
+    font-size: 16px;
+  }
+}

@@ -1,0 +1,619 @@
+/**
+ * 체험 예약과 운영 화면.
+ *
+ * 토큰은 index.css 것을 그대로 쓴다 — 밝은 종이 톤, 강조색은 면·선에만,
+ * 버튼과 칩은 알약, 면은 --r/--r-lg. 그라데이션·backdrop-filter 없음.
+ */
+
+/* ------------------------------------------------------------------ 예약 */
+
+.book {
+  margin-top: 56px;
+  padding: 28px;
+  border-radius: var(--r-lg);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.book__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.book__head h2 {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* 대기 팀 수는 이 화면에서 가장 자주 보게 되는 숫자다. 노란 면에 얹어 둔다. */
+.book__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-btn);
+  background: var(--reel);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.book__count strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.book__off {
+  color: var(--ink-3);
+}
+
+.book__form {
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field span {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.field input {
+  height: 48px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.field input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.field input::placeholder {
+  color: var(--ink-3);
+}
+
+.book__submit {
+  height: 50px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--ink);
+  color: var(--ink-inv);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.book__submit:hover {
+  background: #2a2420;
+}
+
+.book__submit:disabled {
+  background: var(--ink-3);
+  cursor: default;
+}
+
+.book__fine {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.book__error {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #b4331f;
+}
+
+/* --------------------------------------------------------------- 내 순서 */
+
+.standing {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 6px 0 2px;
+  text-align: center;
+}
+
+/* 대기번호는 사실 확인용이라 칩 하나로 눌러 둔다 — 주인공은 아래 숫자다. */
+.standing__team {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  height: 28px;
+  padding: 0 13px;
+  border-radius: var(--r-btn);
+  background: var(--fill);
+  font-size: 12px;
+  line-height: 28px;
+  color: var(--ink-2);
+}
+
+.standing__team strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 앞에 몇 팀인지가 이 화면의 전부다. 숫자만 키우고 조사는 옆에 작게 붙인다. */
+.standing__ahead {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 2px 0 4px;
+}
+
+.standing__ahead span {
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.standing__ahead strong {
+  font-size: 52px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 차례가 왔을 때. 숫자 자리를 문장이 대신 가지므로 크기를 문장에 맞춘다. */
+.standing__call {
+  margin: 2px 0 0;
+  padding: 11px 22px;
+  border-radius: var(--r-btn);
+  background: var(--reel);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  word-break: keep-all;
+}
+
+.standing__where {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  word-break: keep-all;
+}
+
+.standing__note {
+  max-width: 34ch;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #b4331f;
+  word-break: keep-all;
+}
+
+.standing__fine {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------ 비밀번호 창 */
+
+.lock {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--pad);
+  background: rgba(20, 17, 15, 0.42);
+}
+
+.lock__box {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 320px);
+  padding: 24px;
+  border-radius: var(--r-lg);
+  background: var(--paper);
+}
+
+.lock__acts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ------------------------------------------------------------- 운영 화면 */
+
+.admin {
+  display: grid;
+  gap: 22px;
+}
+
+.admin__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin__head h1 {
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 700;
+}
+
+.admin__ghost {
+  height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.admin__ghost:hover {
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+  color: var(--ink);
+}
+
+.admin__counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin__counts li {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--r);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+.admin__counts span {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.admin__counts strong {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin__notify {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: var(--r);
+  background: var(--reel);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* 발송이 안 붙어 있으면 노란 면 대신 경고 톤으로. */
+.admin__notify--off {
+  display: block;
+  background: #fbeee9;
+  line-height: 1.7;
+  color: #8a3a29;
+  word-break: keep-all;
+}
+
+.admin__notify input {
+  width: 150px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: inherit;
+  font-size: 13px;
+}
+
+.admin__notify em {
+  font-style: normal;
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------- 이름 찾기 */
+
+.find {
+  display: grid;
+  gap: 10px;
+}
+
+.find__box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 16px;
+  border-radius: var(--r-btn);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.find__box span {
+  font-size: 13px;
+  opacity: 0.55;
+}
+
+.find__box input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.find__box input:focus {
+  outline: none;
+}
+
+.find__clear {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.find__none {
+  padding: 4px 4px 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* 흰 면으로 둔다. 위의 발송 줄이 이미 노란 면이라, 여기까지 노랗게 하면 한 화면에
+   노란 덩어리가 셋이 된다(상태 칩까지). 노란색은 상태 칩 하나에만 남긴다. */
+.find__person {
+  padding: 16px 18px;
+  border-radius: var(--r);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.find__who {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.find__who strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.find__who span {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+/* 한 사람이 잡아 둔 활동을 한 줄씩. 활동 이름 · 번호 · 상태 순서로만 읽는다. */
+.find__list {
+  display: grid;
+  gap: 6px;
+}
+
+.find__list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.find__act {
+  min-width: 62px;
+  font-weight: 700;
+}
+
+.find__no {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.tag {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-btn);
+  background: rgba(20, 17, 15, 0.06);
+  font-size: 12px;
+  line-height: 24px;
+  color: var(--ink-2);
+}
+
+/* 지금 이 사람 차례라는 것만 잉크 면으로 세운다 — 찾는 이유가 대개 이것이다. */
+.tag--now {
+  background: var(--ink);
+  color: var(--ink-inv);
+  font-weight: 700;
+}
+
+.tag--call {
+  background: var(--accent);
+  color: #241a05;
+  font-weight: 700;
+}
+
+.tag--done {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-3);
+}
+
+.tag--off {
+  background: transparent;
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+
+.admin__group h2 {
+  margin-bottom: 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.admin__group h2 span {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.admin__empty {
+  padding: 18px 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.admin__list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--r);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+
+/* 맨 앞 팀부터 순서대로. 번호는 자리폭을 고정해 줄이 흔들리지 않게. */
+.admin__no {
+  min-width: 34px;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin__who {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.admin__who strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.admin__who span {
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin__acts {
+  display: flex;
+  gap: 8px;
+}
+
+.admin__done {
+  height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--ink);
+  color: var(--ink-inv);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin__done:hover {
+  background: #2a2420;
+}
+
+.admin__done:disabled,
+.admin__ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.admin__closed {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.admin__closed summary {
+  cursor: pointer;
+}
+
+.admin__closed ul {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  line-height: 1.7;
+}
+
+.gate {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 320px);
+  margin: 40px auto;
+}
+
+/* --------------------------------------------------------------- 좁은 화면 */
+
+@media (max-width: 720px) {
+  .book {
+    margin-top: 40px;
+    padding: 22px 20px;
+  }
+
+  .admin__counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 이름 줄과 버튼 줄을 나눈다 — 한 줄에 밀어 넣으면 번호가 눌린다. */
+  .admin__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px 12px;
+  }
+
+  .admin__acts {
+    grid-column: 1 / -1;
+  }
+
+  .admin__done,
+  .admin__acts .admin__ghost {
+    flex: 1 1 0;
+  }
+}
