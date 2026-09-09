@@ -48,8 +48,6 @@ npm run dev
 | `public/frames/f_001~131.jpg` | 히어로 프레임 **넓은 화면용** 1440×810, 6.3MB | `아큐 테리 수정본.mp4` 에서 `ffmpeg -vf scale=1440:810:flags=lanczos -q:v 4` |
 | `public/frames/m/f_001~131.jpg` | 히어로 프레임 **좁은 화면용** 720×405, 2.7MB | 같은 mp4 에서 `scale=720:405` |
 | `public/models/terry.glb` `aqu.glb` | 돌려보기 기본 모델 (부위 zone id 포함) | Tripo 스캔 + Draco |
-| `public/models/terry-special.glb` | 특수 색깔(돌) 2.5MB | 아래 4절 |
-| `public/models/aqu-special.glb` | 특수 색깔(옻칠 검정) 1.6MB | 아래 4절 |
 | `public/char/terry-sit.png` `terry-run.png` `terry-jump.png` `aqu-stand.png` | 스프라이트·삽화 (투명) | 카카오톡 원본에서 흰 배경 키잉 |
 | `public/brand/logo-mark.png` `logo.png` `emblem.jpg` | 브랜드 마크·엠블럼 | 〃 |
 | `public/art/terry-freesia.jpg` `terry-punk.jpg` | 캐릭터 변형 | 〃 |
@@ -77,7 +75,7 @@ ffmpeg -i KakaoTalk_20260823_220057010_02.jpg -vf "drawbox=x=0:y=616:w=196:h=93:
 
 ### 3D 모델 밝기 (`src/components/Character3D.jsx`)
 ```js
-const ALBEDO_LIFT = { terry: 2.6, aqu: 1.7, "terry-special": 1, "aqu-special": 2.6 }
+const ALBEDO_LIFT = { terry: 2.6, aqu: 1.7 }
 ```
 스캔이 구운 basecolor 가 원화보다 어둡다(원화 몸통 `#d8b878`, 보정 전 화면 `#886848`). 조명을 올려 그림자까지 들뜨게 하는 대신 albedo 만 들어 올린다. 톤매핑은 `NeutralToneMapping` / 노출 1.15 — ACES 는 크림색 파스텔을 탁한 황갈색으로 눌러 버린다.
 

@@ -10,8 +10,6 @@ const MODELS = {
    * 테리의 「특수 색깔」 — 색을 셰이더로 칠하는 게 아니라 따로 만들어 준 모델을 띄운다.
    * 이건 돌 재질이라 원본 텍스처가 이미 밝다. 다른 둘과 달리 밝기 보정을 걸지 않는다.
    */
-  "terry-special": "/models/terry-special.glb",
-  "aqu-special": "/models/aqu-special.glb",
 }
 
 /**
@@ -41,7 +39,7 @@ const ZONE_DEBUG = ZONE_PARAM !== null ? (ZONE_PARAM === "ruler" ? 2 : 1) : 0
  * 에 1을 넘는 값을 허용하고 그 값이 맵에 곱해지므로, 조명이나 노출을 올려 그림자까지
  * 들뜨게 하는 대신 이 모델의 albedo 만 들어 올린다. 값은 화면을 찍어 원화와 비교해 정했다.
  */
-const ALBEDO_LIFT = { terry: 2.6, aqu: 1.7, "terry-special": 1, "aqu-special": 2.6 }
+const ALBEDO_LIFT = { terry: 2.6, aqu: 1.7 }
 
 export const DEFAULT_TINTS = Object.fromEntries(ZONES.map((z) => [z.key, "#ffffff"]))
 
@@ -96,8 +94,9 @@ function Model({ id, tints }) {
       /**
        * Tripo 는 metallic-roughness 맵을 넣으면서 metalness 를 1.0 으로 내보낸다.
        * 금속은 확산광이 없어서 비출 환경맵이 없으면 통째로 새까맣게 렌더된다 —
-       * 새로 받은 terry-special.glb 가 정확히 그 상태로 들어왔다. 이 캐릭터들은
-       * 전부 유전체(클레이)이므로 0 으로 되돌린다.
+       * 예전에 받은 특수 색깔 모델이 정확히 그 상태로 들어와 화면이 새까맸다.
+       * 이 캐릭터들은 전부 유전체(클레이)이므로 0 으로 되돌린다. 새 GLB 를
+       * 넣을 때 화면이 검으면 여기부터 의심할 것.
        */
       mat.metalness = 0
       mat.color.setScalar(ALBEDO_LIFT[id] ?? 1)
