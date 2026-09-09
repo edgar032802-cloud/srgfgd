@@ -247,15 +247,27 @@ function NotifyLine({ notify, password }) {
   if (!notify?.ready) {
     return (
       <p className="admin__notify admin__notify--off">
-        안내 발송이 연결되지 않았습니다. 예약은 정상 접수되지만 문자는 나가지 않으니, 이 화면의 순서를 보고
-        직접 불러 주세요. (연결 방법은 docs/RESERVATION.md)
+        안내 발송이 <strong>연결되지 않았습니다</strong>. 키가 서버에 없습니다. 예약은 정상 접수되지만 문자는
+        나가지 않으니, 이 화면의 순서를 보고 직접 불러 주세요. (연결 방법은 docs/RESERVATION.md)
       </p>
     )
   }
 
   return (
     <form className="admin__notify" onSubmit={send}>
-      <span>{notify.channel} 발송 연결됨</span>
+      {/* 키는 들어와 있는데 발송이 실패하는 경우가 가장 찾기 어렵다.
+          마지막 실패 이유를 그대로 띄워 현장에서 원인을 알 수 있게 한다. */}
+      {notify.lastError ? (
+        <span className="admin__why">
+          마지막 발송 실패 — {notify.lastError.http ? `HTTP ${notify.lastError.http} · ` : ""}
+          {notify.lastError.reason}
+          {notify.lastError.http === 401 ? " (키가 틀렸거나 앞뒤에 공백이 붙었습니다)" : ""}
+        </span>
+      ) : null}
+      <span>
+        {notify.channel} 발송 연결됨
+        {notify.shape ? ` · 키 ${notify.shape.keyLen}자 / 시크릿 ${notify.shape.secretLen}자 · 발신 ${notify.shape.sender}` : ""}
+      </span>
       <input
         value={phone}
         onChange={(e) => setPhone(formatPhone(e.target.value))}

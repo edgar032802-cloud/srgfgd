@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 
 import express from "express"
 
-import { sendMessage, notifyStatus } from "./notify.js"
+import { sendMessage, notifyStatus, lastNotifyError } from "./notify.js"
 
 /**
  * 부스 체험 예약 대기열.
@@ -328,7 +328,7 @@ router.post("/admin/list", requireAdmin, (req, res) => {
   res.json({
     counts: counts(),
     activities: ACTIVITIES,
-    notify: notifyStatus(),
+    notify: { ...notifyStatus(), lastError: lastNotifyError() },
     reservations: rows.map(adminView),
   })
 })

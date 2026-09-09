@@ -409,6 +409,10 @@ export default function TerryRun() {
     if (!el) return undefined
     const io = new IntersectionObserver(([entry]) => {
       inViewRef.current = entry.isIntersecting
+    }, {
+      // 화면에 닿기 조금 전에 켜 둔다. 스크롤해 내려왔을 때 첫 프레임이
+      // 비어 있으면 그것대로 눈에 띈다.
+      rootMargin: "200px 0px"
     })
     io.observe(el)
     return () => io.disconnect()
@@ -463,6 +467,21 @@ export default function TerryRun() {
 
     const loop = (now) => {
       if (!alive) return
+
+      /**
+       * 화면 밖이면 아무것도 하지 않는다.
+       *
+       * 예전에는 페이지가 열려 있는 내내 이 루프가 60fps 로 돌았다 — 사용자가
+       * 맨 위 히어로를 보고 있는 동안에도 캔버스를 계속 다시 그렸다는 뜻이다.
+       * 휴대폰에서는 그대로 발열과 끊김이 된다. 시간(last)만 따라 옮겨 두면
+       * 다시 보일 때 dt 가 튀지 않는다.
+       */
+      if (!inViewRef.current) {
+        last = now
+        raf = requestAnimationFrame(loop)
+        return
+      }
+
       const dt = Math.min((now - last) / 1000, 0.05)
       last = now
 

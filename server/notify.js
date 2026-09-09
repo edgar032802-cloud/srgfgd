@@ -20,14 +20,25 @@ import crypto from "node:crypto"
 
 const SOLAPI_URL = "https://api.solapi.com/messages/v4/send"
 
+/**
+ * **값은 반드시 trim 한다.**
+ *
+ * 배포 플랫폼 대시보드에 키를 붙여 넣을 때 앞뒤 공백이나 따옴표가 함께 들어가는
+ * 일이 흔하다. `.env` 파일은 dotenv 가 다듬어 주지만 대시보드 입력칸은 넣은
+ * 그대로 온다. 시크릿에 공백 한 칸이 붙으면 HMAC 서명이 어긋나 **모든 발송이
+ * 401 로 죽는데**, 화면에는 그저 "보내지 못했습니다"만 뜬다. 원인을 찾기가
+ * 대단히 어려운 종류의 실패라 아예 들어올 때 막는다.
+ */
+const clean = (v) => String(v ?? "").trim().replace(/^["']|["']$/g, "")
+
 const cfg = () => ({
-  key: process.env.SOLAPI_API_KEY ?? "",
-  secret: process.env.SOLAPI_API_SECRET ?? "",
-  from: (process.env.SMS_SENDER ?? "").replace(/\D/g, ""),
-  pfId: process.env.KAKAO_PFID ?? "",
+  key: clean(process.env.SOLAPI_API_KEY),
+  secret: clean(process.env.SOLAPI_API_SECRET),
+  from: clean(process.env.SMS_SENDER).replace(/\D/g, ""),
+  pfId: clean(process.env.KAKAO_PFID),
   templates: {
-    booked: process.env.KAKAO_TEMPLATE_BOOKED ?? "",
-    callup: process.env.KAKAO_TEMPLATE_CALLUP ?? "",
+    booked: clean(process.env.KAKAO_TEMPLATE_BOOKED),
+    callup: clean(process.env.KAKAO_TEMPLATE_CALLUP),
   },
 })
 
@@ -36,12 +47,23 @@ export function notifyConfigured() {
   return Boolean(c.key && c.secret && c.from)
 }
 
-/** 운영 화면에 상태를 한 줄로 보여 주기 위한 요약. */
+/**
+ * 운영 화면에 상태를 한 줄로 보여 주기 위한 요약.
+ *
+ * 값 자체는 절대 내보내지 않는다. 대신 **길이**를 함께 준다 — 키가 잘려 들어갔거나
+ * 공백이 붙었을 때 화면에서 바로 알아볼 수 있는 유일한 단서다.
+ * (Solapi 키는 16자, 시크릿은 32자다.)
+ */
 export function notifyStatus() {
   const c = cfg()
-  if (!notifyConfigured()) return { ready: false, channel: "none" }
-  return { ready: true, channel: c.pfId && c.templates.booked ? "알림톡" : "문자" }
+  const shape = { keyLen: c.key.length, secretLen: c.secret.length, sender: c.from ? "***" + c.from.slice(-4) : "" }
+  if (!notifyConfigured()) return { ready: false, channel: "none", shape }
+  return { ready: true, channel: c.pfId && c.templates.booked ? "알림톡" : "문자", shape }
 }
+
+/** 마지막 실패 이유. 운영 화면이 "왜 안 갔는지"를 보여 줄 수 있게 들고 있는다. */
+let lastError = null
+export const lastNotifyError = () => lastError
 
 /** 한글은 2바이트로 세는 이동통신 기준. 90바이트를 넘으면 LMS 다. */
 function smsType(text) {
@@ -98,12 +120,18 @@ export async function sendMessage({ to, text, kind, variables }) {
     // Solapi 는 200 을 주면서 본문에 실패를 담기도 한다.
     const failed = !response.ok || (data.statusCode && data.statusCode !== "2000")
     if (failed) {
-      const reason = data.statusMessage ?? data.errorMessage ?? `HTTP ${response.status}`
-      console.error("[booth] 발송 실패", phone.slice(-4), reason)
-      return { status: "failed", channel: useKakao ? "알림톡" : "문자", reason, text }
+      // 사람이 읽고 고칠 수 있는 형태로 남긴다. 401 이면 키가 틀렸거나 공백이
+      // 붙은 것이고, 잔액이 없으면 그렇게 적혀 온다 — "보내지 못했습니다" 만으로는
+      // 어느 쪽인지 알 수 없어 현장에서 손을 쓸 수가 없다.
+      const reason = data.errorMessage ?? data.statusMessage ?? data.errorCode ?? `HTTP ${response.status}`
+      lastError = { at: new Date().toISOString(), http: response.status, reason: String(reason).slice(0, 160) }
+      console.error("[booth] 발송 실패", phone.slice(-4), response.status, reason)
+      return { status: "failed", channel: useKakao ? "알림톡" : "문자", reason: lastError.reason, text }
     }
+    lastError = null
     return { status: "sent", channel: useKakao ? "알림톡" : "문자", text }
   } catch (e) {
+    lastError = { at: new Date().toISOString(), http: 0, reason: e.message }
     console.error("[booth] 발송 중 오류", e.message)
     return { status: "failed", channel: useKakao ? "알림톡" : "문자", reason: e.message, text }
   }
