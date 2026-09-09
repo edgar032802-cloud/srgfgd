@@ -29,7 +29,23 @@ const SOLAPI_URL = "https://api.solapi.com/messages/v4/send"
  * 401 로 죽는데**, 화면에는 그저 "보내지 못했습니다"만 뜬다. 원인을 찾기가
  * 대단히 어려운 종류의 실패라 아예 들어올 때 막는다.
  */
-const clean = (v) => String(v ?? "").trim().replace(/^["']|["']$/g, "")
+const clean = (v) => {
+  let s = String(v ?? "").trim()
+  // `SOLAPI_API_SECRET=값` 통째로 붙여 넣은 경우 — 마지막 `=` 뒤만 취한다.
+  // Solapi 키·시크릿에는 `=` 가 들어가지 않는다.
+  if (s.includes("=")) s = s.slice(s.lastIndexOf("=") + 1)
+  // 따옴표와 **모든** 공백·줄바꿈을 턴다. 키에는 공백이 있을 수 없다.
+  return s.replace(/^["']|["']$/g, "").replace(/\s+/g, "").trim()
+}
+
+/**
+ * 값을 노출하지 않고 "같은 값인지"만 비교하기 위한 지문.
+ *
+ * 길이만으로는 부족하다 — 32자인데 다른 값일 수도 있다. 앞 여섯 자리 해시를
+ * 화면에 띄우면 올바른 값의 지문과 눈으로 대조할 수 있고, 원문은 새지 않는다.
+ */
+const fingerprint = (v) =>
+  v ? crypto.createHash("sha256").update(v).digest("hex").slice(0, 6) : ""
 
 const cfg = () => ({
   key: clean(process.env.SOLAPI_API_KEY),
@@ -56,7 +72,13 @@ export function notifyConfigured() {
  */
 export function notifyStatus() {
   const c = cfg()
-  const shape = { keyLen: c.key.length, secretLen: c.secret.length, sender: c.from ? "***" + c.from.slice(-4) : "" }
+  const shape = {
+    keyLen: c.key.length,
+    secretLen: c.secret.length,
+    keyFp: fingerprint(c.key),
+    secretFp: fingerprint(c.secret),
+    sender: c.from ? "***" + c.from.slice(-4) : "",
+  }
   if (!notifyConfigured()) return { ready: false, channel: "none", shape }
   return { ready: true, channel: c.pfId && c.templates.booked ? "알림톡" : "문자", shape }
 }

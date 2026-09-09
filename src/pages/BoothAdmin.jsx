@@ -156,6 +156,21 @@ export default function BoothAdmin() {
 }
 
 /**
+ * 키 하나의 상태를 글자 수와 지문으로 보여 준다.
+ *
+ * 길이만으로는 부족하다 — 32자인데 다른 값일 수도 있다. 앞 여섯 자리 해시를
+ * 함께 띄우면 올바른 값의 지문과 눈으로 대조할 수 있고, 원문은 새지 않는다.
+ */
+function Shape({ len, want, fp }) {
+  const ok = len === want
+  return (
+    <b className={ok ? "shape shape--ok" : "shape shape--bad"}>
+      {len}자{ok ? "" : ` (${want}자여야 함)`} · {fp || "—"}
+    </b>
+  )
+}
+
+/**
  * 한 사람이 무엇을 잡아 뒀는지.
  *
  * 부스에서 "제가 예약했는데요"라고 오는 사람을 이름으로 찾는 자리다. 활동이 넷이라
@@ -266,7 +281,15 @@ function NotifyLine({ notify, password }) {
       ) : null}
       <span>
         {notify.channel} 발송 연결됨
-        {notify.shape ? ` · 키 ${notify.shape.keyLen}자 / 시크릿 ${notify.shape.secretLen}자 · 발신 ${notify.shape.sender}` : ""}
+        {notify.shape ? (
+          <>
+            {" · 키 "}
+            <Shape len={notify.shape.keyLen} want={16} fp={notify.shape.keyFp} />
+            {" / 시크릿 "}
+            <Shape len={notify.shape.secretLen} want={32} fp={notify.shape.secretFp} />
+            {` · 발신 ${notify.shape.sender}`}
+          </>
+        ) : null}
       </span>
       <input
         value={phone}

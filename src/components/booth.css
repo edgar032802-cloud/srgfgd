@@ -336,6 +336,23 @@
   font-size: 16px; /* iOS 확대 방지 */
 }
 
+/* 키 상태 — 맞으면 조용히, 틀리면 눈에 띄게. 값 자체는 나오지 않는다. */
+.shape {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.shape--ok {
+  color: var(--ink);
+}
+
+.shape--bad {
+  padding: 1px 6px;
+  border-radius: var(--r);
+  background: #f6d5cb;
+  color: #8a3a29;
+}
+
 /* 실패 이유는 줄 전체를 차지하게 둔다. 짧게 자르면 정작 필요한 부분이 잘린다. */
 .admin__why {
   flex: 1 1 100%;
