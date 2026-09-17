@@ -30,10 +30,15 @@ export const adminList = (password) => post("/api/booth/admin/list", { password 
 export const adminComplete = (password, id) => post("/api/booth/admin/complete", { password, id })
 export const adminCancel = (password, id) => post("/api/booth/admin/cancel", { password, id })
 export const adminTest = (password, phone) => post("/api/booth/admin/test", { password, phone })
+/** 오늘 이 체험존 마감. 서버가 체험 완료 정원 이상인지 다시 확인한다. */
+export const adminClose = (password, activity) => post("/api/booth/admin/close", { password, activity })
+export const adminReopen = (password, activity) => post("/api/booth/admin/reopen", { password, activity })
 
 /* 내가 넣은 예약은 이 기기에만 남긴다 — 서버는 누가 누구인지 묻지 않는다. */
 
-const KEY = "freesiaBooking"
+/** 다른 탭이 예약했을 때 storage 이벤트로 알아차리려고 밖에서도 쓴다. */
+export const BOOKING_KEY = "freesiaBooking"
+const KEY = BOOKING_KEY
 
 export function readBookings() {
   try {

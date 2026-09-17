@@ -14,9 +14,13 @@ import { sendMessage, notifyStatus, lastNotifyError } from "./notify.js"
  * 누르면 맨 앞이 빠지면서 뒤가 한 칸씩 당겨진다. 앞에 다섯 팀 이하로 남는 순간
  * 한 번만 "부스로 오세요" 안내가 나간다.
  *
- * 저장은 JSON 파일 하나. 행사 하루짜리 줄이라 데이터베이스를 세울 이유가 없고,
- * 파일이면 행사가 끝난 뒤 지우기도 쉽다(개인정보가 들어 있으니 지워야 한다).
- * 결제 쪽 코드와는 완전히 분리되어 있다 — 이 파일은 그쪽을 건드리지 않는다.
+ * **줄은 하루 단위다**(2026-09-16). 체험존마다 하루 100팀을 받고, 한국 시각 00시가
+ * 지나면 대기번호가 1번부터 다시 시작하고 마감도 풀린다. 날짜가 바뀌는 순간에 무엇을
+ * "지우는" 작업은 없다 — 모든 조회가 "오늘" 기록만 보도록 되어 있어서, 날이 바뀌면
+ * 저절로 새 줄이 된다. 타이머에 기대지 않으므로 자정에 서버가 꺼져 있었어도 틀리지
+ * 않고, 지난 기록은 파일에 그대로 남아 이름 검색으로 찾을 수 있다.
+ *
+ * 저장은 JSON 파일 하나. 결제 쪽 코드와는 완전히 분리되어 있다.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -38,6 +42,12 @@ const CALL_AHEAD = 5
  * 도착 순서가 보장되지 않는다. 접수가 먼저 자리를 잡도록 이만큼 띄운다.
  */
 const CALL_DELAY_MS = 6000
+
+/** 체험존 하나가 하루에 받는 팀 수. */
+const DAILY_CAPACITY = Math.max(1, Math.floor(Number(process.env.BOOTH_DAILY_CAPACITY) || 100))
+
+/** 마감했거나 정원이 찬 체험존에 들어온 사람에게 보여 줄 말. */
+export const CLOSED_MESSAGE = "오늘은 마감되었어요. 내일 다시 만나요."
 
 export const ACTIVITIES = {
   register: { label: "감각등록", title: "보지 않고 물건 맞추기" },
@@ -65,17 +75,72 @@ if (PROD && !ADMIN_PASSWORD) {
   )
 }
 
+/* -------------------------------------------------------------------- 시계 */
+
+/**
+ * 이 파일의 모든 "지금"은 여기서 나온다. `new Date()` 를 따로 부르지 않는다.
+ *
+ * `BOOTH_CLOCK_OFFSET_MS` 는 **검증용**이다. 자정을 넘기는 동작을 실제로 밤까지
+ * 기다리지 않고 확인하려고 서버의 시계를 앞뒤로 민다. 운영에서는 비워 둔다.
+ */
+const CLOCK_OFFSET = Math.trunc(Number(process.env.BOOTH_CLOCK_OFFSET_MS) || 0)
+if (CLOCK_OFFSET) {
+  console.warn(`[booth] 시계를 ${CLOCK_OFFSET}ms 밀어서 돈다 — 검증용이다. 운영에서는 비워 둘 것.`)
+}
+const nowMs = () => Date.now() + CLOCK_OFFSET
+const isoAt = (ms) => new Date(ms).toISOString()
+
+/**
+ * 한국 날짜(YYYY-MM-DD).
+ *
+ * **서버 시간대를 믿지 않는다.** Railway 같은 곳의 서버는 UTC 로 돈다. 서버 로컬
+ * 날짜를 쓰면 날이 바뀌는 시각이 한국 오전 9시가 되어, 한창 줄을 받는 아침에 대기가
+ * 통째로 초기화된다. 한국은 1988년 이후 서머타임이 없으므로 +9시간 고정 계산이
+ * 정확하고, 시간대 데이터(ICU)가 빠진 런타임에서도 똑같이 동작한다.
+ */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000
+const kstDate = (ms) => new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 10)
+const today = () => kstDate(nowMs())
+
+/** 예전 기록에는 day 가 없다. 접수 시각에서 한국 날짜를 계산한다. */
+const dayOf = (r) => {
+  if (typeof r.day === "string" && r.day) return r.day
+  const t = Date.parse(r.createdAt)
+  return Number.isFinite(t) ? kstDate(t) : ""
+}
+
 /* ------------------------------------------------------------------ 저장소 */
 
-let state = { reservations: [] }
+let state = { reservations: [], closed: {} }
 
+/**
+ * 파일이 없으면 빈 줄로 시작한다. **파일이 깨져 있으면 절대 덮어쓰지 않는다** —
+ * 그대로 빈 상태로 시작했다가 다음 저장에서 덮으면 그날 명단이 사라진다. 깨진
+ * 파일은 옆에 따로 옮겨 두고 크게 알린다.
+ */
 function load() {
+  let raw
   try {
-    const raw = fs.readFileSync(DATA_FILE, "utf8")
+    raw = fs.readFileSync(DATA_FILE, "utf8")
+  } catch (e) {
+    if (e.code !== "ENOENT") console.error("[booth] 예약 파일을 읽지 못했다", e.message)
+    return
+  }
+  try {
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed?.reservations)) state = parsed
-  } catch {
-    // 파일이 아직 없다 — 빈 줄로 시작한다.
+    if (!Array.isArray(parsed?.reservations)) throw new Error("reservations 배열이 없다")
+    state = {
+      reservations: parsed.reservations,
+      closed: parsed.closed && typeof parsed.closed === "object" ? parsed.closed : {},
+    }
+  } catch (e) {
+    const aside = `${DATA_FILE}.broken-${Date.now()}`
+    try {
+      fs.copyFileSync(DATA_FILE, aside)
+    } catch {
+      // 옮기지도 못하면 원본을 건드리지 않은 채로 둔다 — 아래 save 가 덮지 않도록.
+    }
+    console.error(`[booth] 예약 파일이 깨져 있다(${e.message}). 원본을 ${aside} 로 옮겨 두고 빈 줄로 시작한다.`)
   }
 }
 
@@ -95,34 +160,101 @@ load()
 
 /* -------------------------------------------------------------------- 도구 */
 
-const waitingOf = (activity) =>
-  state.reservations
-    .filter((r) => r.activity === activity && r.status === "waiting")
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+/** 같은 밀리초에 두 건이 들어와도 순서가 흔들리지 않게 대기번호로 한 번 더 가른다. */
+const byQueue = (a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || (a.teamNo || 0) - (b.teamNo || 0)
 
-const aheadOf = (reservation) => {
-  const q = waitingOf(reservation.activity)
-  const i = q.findIndex((r) => r.id === reservation.id)
+const zoneOn = (activity, day) => state.reservations.filter((r) => r.activity === activity && dayOf(r) === day)
+const waitingOn = (activity, day) => zoneOn(activity, day).filter((r) => r.status === "waiting").sort(byQueue)
+const doneOn = (activity, day) => zoneOn(activity, day).filter((r) => r.status === "done").length
+/** 정원을 차지하는 예약. 취소된 자리는 다른 팀에게 돌아간다. */
+const activeOn = (activity, day) =>
+  zoneOn(activity, day).filter((r) => r.status === "waiting" || r.status === "done").length
+const closedOn = (activity, day) => Boolean(state.closed?.[day]?.[activity])
+const fullOn = (activity, day) => activeOn(activity, day) >= DAILY_CAPACITY
+/** 방문자에게는 둘이 같다 — 오늘은 더 받지 않는다. */
+const shutOn = (activity, day) => closedOn(activity, day) || fullOn(activity, day)
+
+/**
+ * 오늘 이 체험존의 다음 대기번호.
+ *
+ * 건수 + 1 이 아니라 **가장 큰 번호 + 1** 이다. 예전 방식으로 매긴 번호가 섞여
+ * 있어도 같은 날 같은 번호가 두 번 나오지 않는다. 취소된 번호도 다시 쓰지 않는다.
+ */
+const nextTeamNo = (activity, day) => zoneOn(activity, day).reduce((m, r) => Math.max(m, Number(r.teamNo) || 0), 0) + 1
+
+/** 날이 바뀌었는데 아직 대기로 남은 예약은 만료다. 어제 줄에 새 날의 순서를 매기지 않는다. */
+const statusOf = (r) => (r.status === "waiting" && dayOf(r) !== today() ? "expired" : r.status)
+
+const aheadOf = (r) => {
+  if (statusOf(r) !== "waiting") return null
+  const i = waitingOn(r.activity, dayOf(r)).findIndex((x) => x.id === r.id)
   return i < 0 ? null : i
 }
 
-const counts = () =>
-  Object.fromEntries(Object.keys(ACTIVITIES).map((id) => [id, waitingOf(id).length]))
+const counts = (day = today()) =>
+  Object.fromEntries(Object.keys(ACTIVITIES).map((id) => [id, waitingOn(id, day).length]))
+
+/** 방문자 화면이 쓰는 것 — 대기 수와 "오늘 더 받는지"만. */
+const publicZones = (day = today()) =>
+  Object.fromEntries(
+    Object.keys(ACTIVITIES).map((id) => [id, { waiting: waitingOn(id, day).length, shut: shutOn(id, day) }])
+  )
+
+/** 운영 화면이 쓰는 것. */
+const adminZones = (day = today()) =>
+  Object.fromEntries(
+    Object.keys(ACTIVITIES).map((id) => {
+      const done = doneOn(id, day)
+      const closed = closedOn(id, day)
+      return [
+        id,
+        {
+          waiting: waitingOn(id, day).length,
+          done,
+          active: activeOn(id, day),
+          capacity: DAILY_CAPACITY,
+          full: fullOn(id, day),
+          closed,
+          closedAt: closed ? state.closed[day][id] : null,
+          // "100팀 이상 체험 완료부터" 마감할 수 있다.
+          canClose: !closed && done >= DAILY_CAPACITY,
+        },
+      ]
+    })
+  )
 
 /** 번호는 저장하되 밖으로는 뒤 네 자리만 보낸다. */
-const maskPhone = (phone) => (phone.length > 4 ? "***" + phone.slice(-4) : phone)
+const maskPhone = (phone) => (String(phone).length > 4 ? "***" + String(phone).slice(-4) : String(phone))
 
 const publicView = (r) => ({
   id: r.id,
   activity: r.activity,
+  day: dayOf(r),
   teamNo: r.teamNo,
-  status: r.status,
-  ahead: r.status === "waiting" ? aheadOf(r) : null,
-  waiting: waitingOf(r.activity).length,
+  status: statusOf(r),
+  ahead: aheadOf(r),
+  waiting: waitingOn(r.activity, dayOf(r)).length,
   name: r.name,
   phoneMasked: maskPhone(r.phone),
   calledAt: r.calledAt ?? null,
 })
+
+/**
+ * 운영자가 알아야 할 문자 상태 하나로 줄인다. 화면이 notices 배열을 해석하게 두면
+ * 화면마다 해석이 달라진다.
+ *   sent     호출 문자가 나갔다
+ *   skipped  호출 대상이었지만 문자 발송이 연결돼 있지 않다
+ *   failed   호출 문자가 실패했다 — 직접 불러야 한다
+ *   pending  아직 호출할 때가 아니다
+ */
+function callupState(r) {
+  const last = [...(r.notices ?? [])].reverse().find((n) => n.kind === "callup")
+  if (last?.status === "failed" && (!r.calledAt || !r.callupFailures)) return "failed" // 예전 기록 포함
+  if (!r.calledAt && (r.callupFailures ?? 0) > 0) return "failed"
+  if (r.calledAt && last?.status === "skipped") return "skipped"
+  if (r.calledAt) return "sent" // 보내는 중이면 곧 기록이 붙는다
+  return "pending"
+}
 
 const adminView = (r) => ({
   ...publicView(r),
@@ -131,11 +263,13 @@ const adminView = (r) => ({
   createdAt: r.createdAt,
   doneAt: r.doneAt ?? null,
   notices: r.notices ?? [],
+  callup: callupState(r),
+  callupFailures: r.callupFailures ?? 0,
 })
 
 function record(r, kind, result) {
   r.notices = r.notices ?? []
-  r.notices.push({ kind, at: new Date().toISOString(), ...result })
+  r.notices.push({ kind, at: isoAt(nowMs()), ...result })
 }
 
 /* -------------------------------------------------------- 안내 문구와 발송 */
@@ -144,14 +278,9 @@ function record(r, kind, result) {
  * 문구는 **모두 90바이트 안**이어야 한다. 요금 때문만이 아니다.
  *
  * 90바이트를 넘으면 SMS 가 LMS 가 되는데, LMS 에는 **제목(subject)** 이 붙는다.
- * 휴대폰은 그 제목을 본문 위, `[Web발신]` 보다 앞줄에 굵게 띄운다 — 사용자가
- * "web발신 앞에 제목 나온다"고 한 것이 이것이다. SMS 에는 제목 칸 자체가 없다.
- * 게다가 LMS 와 SMS 는 통신사에서 다른 경로로 나가 **짧은 SMS 가 긴 LMS 를
- * 추월한다.** 접수(LMS)와 호출(SMS)을 함께 보냈더니 "지금 입장해주세요"가
- * 먼저 도착한 것이 그래서다. 둘 다 SMS 면 경로가 같아 순서가 뒤집히지 않는다.
- *
- * 그래서 접수 문구에서 "대기 현황은 예약 화면에서..." 한 문장을 덜어 냈다.
- * 되살리면 140바이트가 되어 제목 줄과 순서 뒤바뀜이 함께 돌아온다.
+ * 휴대폰은 그 제목을 본문 위, `[Web발신]` 보다 앞줄에 굵게 띄운다. 게다가 LMS 와
+ * SMS 는 통신사에서 다른 경로로 나가 **짧은 SMS 가 긴 LMS 를 추월한다.**
+ * 둘 다 SMS 면 경로가 같아 순서가 뒤집히지 않는다.
  *
  * `CALL_AHEAD` 를 바꾸면 접수 문구의 숫자도 함께 따라간다 — 문구와 실제 동작이
  * 어긋나는 것이 가장 나쁘다.
@@ -159,18 +288,36 @@ function record(r, kind, result) {
 const SMS_LIMIT = 90
 const msgBytes = (t) => [...t].reduce((n, c) => n + (c.charCodeAt(0) > 127 ? 2 : 1), 0)
 
+/**
+ * 이름을 뒤에서부터 한 글자씩 줄여 90바이트 안에 넣는다. 단체 이름처럼 긴 이름은
+ * 입력에서 허용하므로(20자), 문구마다 마지막 방어선이 필요하다.
+ */
+function fitName(make, name) {
+  let chars = [...String(name)]
+  let text = make(chars.join(""))
+  while (msgBytes(text) > SMS_LIMIT && chars.length > 1) {
+    chars = chars.slice(0, -1)
+    text = make(chars.join("") + "…")
+  }
+  return text
+}
+
 const bookedText = (r) => {
-  const full = `[작업치료학과 프리지아] ${r.name}님, ${r.teamNo}번으로 접수되었습니다. ${CALL_AHEAD}팀 남으면 연락드립니다.`
-  if (msgBytes(full) <= SMS_LIMIT) return full
-  // 이름이 유난히 길면(단체 이름 등) 학과를 접는다. 제목 줄이 붙는 LMS 로
-  // 넘어가는 것보다 이쪽이 낫다.
-  return `[프리지아] ${r.name}님, ${r.teamNo}번으로 접수되었습니다. ${CALL_AHEAD}팀 남으면 연락드립니다.`
+  const long = (n) => `[작업치료학과 프리지아] ${n}님, ${r.teamNo}번으로 접수되었습니다. ${CALL_AHEAD}팀 남으면 연락드립니다.`
+  if (msgBytes(long(r.name)) <= SMS_LIMIT) return long(r.name)
+  // 이름이 길면 먼저 학과를 접고, 그래도 넘치면 이름을 줄인다.
+  const short = (n) => `[프리지아] ${n}님, ${r.teamNo}번으로 접수되었습니다. ${CALL_AHEAD}팀 남으면 연락드립니다.`
+  return fitName(short, r.name)
 }
 
 const callUpText = (r, ahead) =>
-  ahead === 0
-    ? `${r.name}님, 지금 입장해주세요. 부스 앞으로 와주세요.`
-    : `${r.name}님, ${ahead}팀 남았습니다. 부스 앞에서 대기해주세요.`
+  fitName(
+    (n) =>
+      ahead === 0
+        ? `${n}님, 지금 입장해주세요. 부스 앞으로 와주세요.`
+        : `${n}님, ${ahead}팀 남았습니다. 부스 앞에서 대기해주세요.`,
+    r.name
+  )
 
 const variablesFor = (r, ahead) => ({
   "#{name}": r.name,
@@ -180,17 +327,74 @@ const variablesFor = (r, ahead) => ({
 })
 
 /**
+ * 호출 문자를 보내도 되는 때가 됐는가.
+ *
+ * **접수 문자가 나간 지 CALL_DELAY_MS 가 지나야 한다.** 예약 직후 6초 안에 다른
+ * 팀의 체험 완료가 눌리면, 예전에는 이 사람이 곧바로 호출 대상이 되어 호출이
+ * 접수보다 먼저 도착할 수 있었다(검토에서 재현됨). 기준은 접수 문자를 **보낸
+ * 뒤** 남긴 기록의 시각이다 — 접수 발송을 기다리는 동안에는 대상이 아니다.
+ *
+ * 접수 기록이 아예 없는데 한참 지났다면(접수 발송 중에 서버가 죽은 경우) 더
+ * 기다리지 않는다. 그렇지 않으면 그 사람은 영영 불리지 않는다.
+ */
+const READY_SLACK_MS = 200
+const ORPHAN_AFTER_MS = 60_000
+function readyForCallup(r, now) {
+  const booked = (r.notices ?? []).find((n) => n.kind === "booked")
+  if (booked) return Date.parse(booked.at) + CALL_DELAY_MS - READY_SLACK_MS <= now
+  return Date.parse(r.createdAt) + ORPHAN_AFTER_MS <= now
+}
+
+/** 호출 발송이 실패하면 몇 번까지 다시 해 볼지. 설정 문제라면 더 두드려도 소용없다. */
+const MAX_CALLUP_TRIES = 3
+/**
+ * 실패한 뒤 다시 보내기까지 최소 간격. 이게 없으면 서버 시작 점검과 예약 타이머가
+ * 몇백 ms 차이로 겹칠 때 세 번의 기회를 1초 안에 다 써 버린다.
+ */
+const RETRY_GAP_MS = 8000
+const retryDue = (r, now) => !r.lastCallupFailAt || Date.parse(r.lastCallupFailAt) + RETRY_GAP_MS <= now
+
+/**
  * 줄이 줄어든 뒤 부를 사람을 부른다. 앞이 다섯 팀 이하로 남았고 아직 부르지
  * 않은 사람 전부 — 완료가 몰아서 눌리면 순서를 건너뛸 수 있어서, 정확히 5 가
- * 아니라 5 이하를 본다. `calledAt` 이 있으면 두 번 부르지 않는다.
+ * 아니라 5 이하를 본다.
+ *
+ * 지키는 것:
+ * - **오늘 줄만.** 자정 직전에 걸어 둔 타이머가 자정 뒤에 돌아도, 이미 만료된
+ *   어제 예약에 "지금 입장해주세요"를 보내지 않는다.
+ * - **한 사람에게 한 번.** 보내기 전에 대상 전원에게 `calledAt` 을 먼저 찍는다.
+ *   발송을 기다리는 사이에 이 함수가 또 돌아도 같은 사람을 두 번 부르지 않는다.
+ * - **보내기 직전에 다시 확인.** 여러 통을 차례로 보내는 사이에 누가 취소되거나
+ *   앞 팀이 빠질 수 있다. 줄에서 빠졌으면 건너뛰고, 남은 팀 수는 그 순간 값으로 쓴다.
+ * - **실패하면 표시를 거둔다.** 호출이 실패했는데 "호출함"으로 남으면 운영자는
+ *   불렀다고 믿는다. 표시를 지우고 실패 횟수를 세어 다음 기회에 다시 보낸다.
  */
-async function callUpDue(activity) {
-  const due = waitingOf(activity)
+async function callUpOnce(activity, day) {
+  if (day !== today()) return 0
+  const now = nowMs()
+  const due = waitingOn(activity, day)
     .map((r, ahead) => ({ r, ahead }))
-    .filter(({ r, ahead }) => ahead <= CALL_AHEAD && !r.calledAt)
+    .filter(
+      ({ r, ahead }) =>
+        ahead <= CALL_AHEAD &&
+        !r.calledAt &&
+        (r.callupFailures ?? 0) < MAX_CALLUP_TRIES &&
+        retryDue(r, now) &&
+        readyForCallup(r, now)
+    )
+  if (!due.length) return 0
 
-  for (const { r, ahead } of due) {
-    r.calledAt = new Date().toISOString()
+  const claimed = isoAt(now)
+  for (const { r } of due) r.calledAt = claimed
+  save()
+
+  let sent = 0
+  for (const { r } of due) {
+    const ahead = aheadOf(r)
+    if (statusOf(r) !== "waiting" || ahead === null || ahead > CALL_AHEAD) {
+      r.calledAt = null
+      continue
+    }
     const result = await sendMessage({
       to: r.phone,
       text: callUpText(r, ahead),
@@ -198,10 +402,48 @@ async function callUpDue(activity) {
       variables: variablesFor(r, ahead),
     })
     record(r, "callup", result)
+    if (result.status === "failed") {
+      r.calledAt = null
+      r.callupFailures = (r.callupFailures ?? 0) + 1
+      r.lastCallupFailAt = isoAt(nowMs())
+    } else {
+      sent++
+    }
   }
-  if (due.length) save()
-  return due.length
+  save()
+  return sent
 }
+
+/**
+ * 같은 체험존의 호출은 한 줄로 세워 차례로 돈다. 겹쳐 돌면 문자 순서가 섞이고,
+ * 한쪽이 확인하는 사이에 다른 쪽이 상태를 바꾼다.
+ */
+const callUpChains = new Map()
+function callUpDue(activity, day = today()) {
+  const prev = callUpChains.get(activity) ?? Promise.resolve()
+  const next = prev
+    .catch(() => 0)
+    .then(() => callUpOnce(activity, day))
+    .catch((e) => {
+      console.error("[booth] 호출 처리 실패", e.message)
+      return 0
+    })
+  callUpChains.set(activity, next)
+  return next
+}
+
+/**
+ * 정기 점검. 호출이 사건(예약·완료·취소)에만 기대면 빠지는 경우가 있다 —
+ * 예약 6초 안에 서버가 다시 뜨면 그 사람의 타이머가 사라지고, 실패한 호출은
+ * 다음 사건이 올 때까지 다시 시도되지 않는다. 몇 초마다 오늘 줄을 훑어
+ * 보낼 때가 된 사람을 부른다. 위 규칙을 그대로 따르므로 중복은 생기지 않는다.
+ */
+const SWEEP_MS = 10_000
+function sweep() {
+  for (const activity of Object.keys(ACTIVITIES)) callUpDue(activity)
+}
+setTimeout(sweep, CALL_DELAY_MS).unref?.()
+setInterval(sweep, SWEEP_MS).unref?.()
 
 /* ------------------------------------------------------------------ 유효성 */
 
@@ -210,9 +452,14 @@ async function callUpDue(activity) {
 const NAME_RE = /^[가-힣a-zA-Z0-9][가-힣a-zA-Z0-9\s.()·-]{0,19}$/
 const PHONE_RE = /^01[016789]\d{7,8}$/
 
-function validate(body) {
+const activityOf = (body) => {
   const activity = String(body?.activity ?? "")
-  if (!ACTIVITIES[activity]) return { error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." }
+  return Object.hasOwn(ACTIVITIES, activity) ? activity : ""
+}
+
+function validate(body) {
+  const activity = activityOf(body)
+  if (!activity) return { error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." }
 
   const name = String(body?.name ?? "").trim()
   if (!NAME_RE.test(name)) return { error: "BAD_NAME", message: "이름을 확인해 주세요." }
@@ -229,18 +476,19 @@ function validate(body) {
 /**
  * 스크립트로 줄을 도배하는 것만 막는다.
  *
- * 학교 와이파이나 통신사 NAT 뒤에서는 **방문자 전부가 같은 IP 로 보인다**.
- * 여기를 조이면 진짜 손님이 먼저 막히므로 한도를 넉넉히 둔다. 같은 번호로 같은
- * 활동을 두 번 잡는 것은 아래 중복 검사가 따로 막고, 장난 예약은 운영 화면에서
- * 취소하면 된다.
+ * 학교 와이파이나 통신사 NAT 뒤에서는 **방문자 전부가 같은 IP 로 보인다**. 수업이
+ * 끝나고 한 반이 한꺼번에 QR 을 찍으면 1분에 수십 건이 한 IP 에서 온다. 여기를
+ * 조이면 진짜 손님이 먼저 막히므로 넉넉히 둔다(전에는 20 이라 그런 상황에서 막혔다).
+ * 줄의 크기 자체는 하루 정원이 따로 막는다.
  */
+const RATE_PER_MIN = Math.max(1, Math.floor(Number(process.env.BOOTH_RATE_PER_MIN) || 60))
 const hits = new Map()
 function tooMany(ip) {
   const now = Date.now()
   const list = (hits.get(ip) ?? []).filter((t) => now - t < 60_000)
   list.push(now)
   hits.set(ip, list)
-  return list.length > 20
+  return list.length > RATE_PER_MIN
 }
 
 const requireAdmin = (req, res, next) => {
@@ -260,11 +508,20 @@ const requireAdmin = (req, res, next) => {
 
 const router = express.Router()
 
-/** 대기 팀 수. 예약 id 를 함께 주면 그 예약의 현재 순서까지 돌려준다. */
+/** 대기 팀 수와 오늘 받는지. 예약 id 를 함께 주면 그 예약의 현재 순서까지 돌려준다. */
 router.get("/queue", (req, res) => {
+  const day = today()
   const id = req.query.id ? String(req.query.id) : ""
   const mine = id ? state.reservations.find((r) => r.id === id) : null
-  res.json({ counts: counts(), callAhead: CALL_AHEAD, mine: mine ? publicView(mine) : null })
+  res.json({
+    today: day,
+    capacity: DAILY_CAPACITY,
+    callAhead: CALL_AHEAD,
+    closedMessage: CLOSED_MESSAGE,
+    counts: counts(day),
+    zones: publicZones(day),
+    mine: mine ? publicView(mine) : null,
+  })
 })
 
 router.post("/reservations", async (req, res) => {
@@ -275,7 +532,13 @@ router.post("/reservations", async (req, res) => {
   const { value, error, message } = validate(req.body)
   if (error) return res.status(400).json({ error, message })
 
-  const already = waitingOf(value.activity).find((r) => r.phone === value.phone)
+  // 이 요청의 "오늘"은 여기서 한 번만 정한다. 검사하는 사이에 자정이 지나도
+  // 검사한 날과 기록하는 날이 어긋나지 않는다.
+  const t = nowMs()
+  const day = kstDate(t)
+
+  // 이미 줄에 서 있는 사람에게는 마감 안내보다 자기 순서를 먼저 보여 준다.
+  const already = waitingOn(value.activity, day).find((r) => r.phone === value.phone)
   if (already) {
     return res.status(409).json({
       error: "ALREADY_BOOKED",
@@ -284,13 +547,23 @@ router.post("/reservations", async (req, res) => {
     })
   }
 
+  // 마감·정원 검사와 기록 사이에 await 가 없다. 노드는 한 번에 한 요청만 이
+  // 구간을 지나므로, 동시에 몰려도 101번째 팀이 끼어들 틈이 없다.
+  if (shutOn(value.activity, day)) {
+    return res.status(409).json({
+      error: "CLOSED",
+      message: CLOSED_MESSAGE,
+      reason: closedOn(value.activity, day) ? "closed" : "full",
+    })
+  }
+
   const reservation = {
-    id: crypto.randomBytes(5).toString("hex"),
+    id: crypto.randomBytes(6).toString("hex"),
     ...value,
-    // 그날 그 활동의 몇 번째 팀인지. 완료된 팀도 세므로 번호가 되돌아오지 않는다.
-    teamNo: state.reservations.filter((r) => r.activity === value.activity).length + 1,
+    day,
+    teamNo: nextTeamNo(value.activity, day),
     status: "waiting",
-    createdAt: new Date().toISOString(),
+    createdAt: isoAt(t),
     calledAt: null,
     notices: [],
   }
@@ -304,7 +577,7 @@ router.post("/reservations", async (req, res) => {
     to: reservation.phone,
     text: bookedText(reservation),
     kind: "booked",
-    variables: variablesFor(reservation, ahead),
+    variables: variablesFor(reservation, ahead ?? 0),
   })
   record(reservation, "booked", result)
   save()
@@ -313,51 +586,95 @@ router.post("/reservations", async (req, res) => {
 
   // 2) 줄이 짧아서 이미 부를 때가 됐으면 **따로 한 통 더.** 붙여 보내면
   //    "접수됐습니다"인지 "지금 오세요"인지 읽는 사람이 구분하지 못한다.
-  //    다만 곧바로 쏘면 두 통이 같은 초에 통신사로 들어가 순서가 뒤집힌다 —
-  //    실제로 "지금 입장해주세요"가 먼저 도착했다. 응답을 먼저 돌려주고,
-  //    접수 문자가 자리를 잡을 만큼 띄운 뒤에 보낸다.
-  if (ahead <= CALL_AHEAD) {
+  //    곧바로 쏘면 두 통이 같은 초에 통신사로 들어가 순서가 뒤집힌다 —
+  //    응답을 먼저 돌려주고, 접수 문자가 자리를 잡을 만큼 띄운 뒤에 보낸다.
+  if (ahead !== null && ahead <= CALL_AHEAD) {
     setTimeout(() => {
-      callUpDue(reservation.activity).catch((e) => console.error("[booth] 호출 발송 실패", e.message))
+      callUpDue(reservation.activity, day).catch((e) => console.error("[booth] 호출 발송 실패", e.message))
     }, CALL_DELAY_MS)
   }
 })
 
 router.post("/admin/list", requireAdmin, (req, res) => {
-  const rows = [...state.reservations].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const day = today()
+  // 검색은 지난날 기록까지 찾아야 하므로 전부 보낸다. 날짜별 묶음은 화면이 나눈다.
+  const rows = [...state.reservations].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
   res.json({
-    counts: counts(),
+    today: day,
+    capacity: DAILY_CAPACITY,
+    closedMessage: CLOSED_MESSAGE,
+    counts: counts(day),
+    zones: adminZones(day),
     activities: ACTIVITIES,
     notify: { ...notifyStatus(), lastError: lastNotifyError() },
     reservations: rows.map(adminView),
   })
 })
 
-router.post("/admin/complete", requireAdmin, async (req, res) => {
+/** 줄에서 빼는 두 동작(완료·취소)의 공통 부분. 오늘 대기 중인 예약만 받는다. */
+function closeOne(req, res, status) {
   const r = state.reservations.find((x) => x.id === String(req.body?.id ?? ""))
-  if (!r) return res.status(404).json({ error: "UNKNOWN_RESERVATION" })
-  if (r.status !== "waiting") return res.status(409).json({ error: "ALREADY_CLOSED" })
+  if (!r) return res.status(404).json({ error: "UNKNOWN_RESERVATION", message: "예약을 찾을 수 없습니다." })
+  if (statusOf(r) !== "waiting") {
+    return res.status(409).json({ error: "ALREADY_CLOSED", message: "이미 끝났거나 지난날의 예약입니다." })
+  }
 
-  r.status = "done"
-  r.doneAt = new Date().toISOString()
+  r.status = status
+  r.doneAt = isoAt(nowMs())
   save()
 
-  const called = await callUpDue(r.activity)
-  res.json({ ok: true, counts: counts(), called })
+  // 응답을 먼저 돌려준다. 호출 문자는 체험존마다 한 줄로 서서 차례로 나가므로,
+  // 기다리면 여러 통을 보내는 중일 때 운영자의 버튼이 몇 초씩 멈춘다.
+  // 상태는 위에서 이미 바뀌었으니, 뒤에서 도는 호출도 새 줄 기준으로 계산한다.
+  callUpDue(r.activity, dayOf(r))
+  res.json({ ok: true, counts: counts(), zones: adminZones() })
+}
+
+router.post("/admin/complete", requireAdmin, (req, res) => closeOne(req, res, "done"))
+
+/** 안 온 팀을 빼는 자리. 이게 없으면 노쇼 하나가 줄을 영원히 막는다. 자리는 다른 팀에게 돌아간다. */
+router.post("/admin/cancel", requireAdmin, (req, res) => closeOne(req, res, "cancelled"))
+
+/**
+ * 오늘 이 체험존 마감.
+ *
+ * **체험 완료가 정원(100팀) 이상일 때만** 된다. 화면에서 버튼을 막아 두는 것과
+ * 별개로 서버가 한 번 더 확인한다 — 화면만 믿으면 오래된 탭이나 직접 보낸 요청에
+ * 뚫린다. 자정이 지나면 날짜가 바뀌어 마감도 저절로 풀린다.
+ */
+router.post("/admin/close", requireAdmin, (req, res) => {
+  const activity = activityOf(req.body)
+  if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
+
+  const day = today()
+  const done = doneOn(activity, day)
+  if (done < DAILY_CAPACITY) {
+    return res.status(409).json({
+      error: "NOT_YET",
+      message: `체험 완료가 ${done}/${DAILY_CAPACITY}팀이라 아직 마감할 수 없습니다.`,
+    })
+  }
+
+  if (!closedOn(activity, day)) {
+    state.closed[day] = { ...(state.closed[day] ?? {}), [activity]: isoAt(nowMs()) }
+    save()
+  }
+  res.json({ ok: true, zones: adminZones(day) })
 })
 
-/** 안 온 팀을 빼는 자리. 이게 없으면 노쇼 하나가 줄을 영원히 막는다. */
-router.post("/admin/cancel", requireAdmin, async (req, res) => {
-  const r = state.reservations.find((x) => x.id === String(req.body?.id ?? ""))
-  if (!r) return res.status(404).json({ error: "UNKNOWN_RESERVATION" })
-  if (r.status !== "waiting") return res.status(409).json({ error: "ALREADY_CLOSED" })
+/** 잘못 누른 마감을 되돌리는 자리. 되돌릴 수 없는 버튼은 현장에서 사고가 된다. */
+router.post("/admin/reopen", requireAdmin, (req, res) => {
+  const activity = activityOf(req.body)
+  if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
 
-  r.status = "cancelled"
-  r.doneAt = new Date().toISOString()
-  save()
-
-  const called = await callUpDue(r.activity)
-  res.json({ ok: true, counts: counts(), called })
+  const day = today()
+  if (state.closed[day]?.[activity]) {
+    const rest = { ...state.closed[day] }
+    delete rest[activity]
+    state.closed[day] = rest
+    save()
+  }
+  res.json({ ok: true, zones: adminZones(day) })
 })
 
 /** 행사 전에 문자가 실제로 나가는지 확인하는 자리. */

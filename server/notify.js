@@ -18,7 +18,12 @@ import crypto from "node:crypto"
  * 알림톡 템플릿 id 가 없으면 문자(SMS/LMS)로 나간다. 둘 다 없으면 미발송.
  */
 
-const SOLAPI_URL = "https://api.solapi.com/messages/v4/send"
+/**
+ * 보내는 곳. `SOLAPI_BASE_URL` 은 **검증용**이다 — 지연·실패를 흉내 내는 가짜
+ * 서버로 돌려서, 문자가 늦게 가거나 실패할 때의 순서와 재시도를 실제 경로 그대로
+ * 확인하려고 둔다. 운영에서는 비워 둔다.
+ */
+const SOLAPI_URL = `${(process.env.SOLAPI_BASE_URL || "https://api.solapi.com").replace(/\/+$/, "")}/messages/v4/send`
 
 /**
  * **값은 반드시 trim 한다.**

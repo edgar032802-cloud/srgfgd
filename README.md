@@ -17,6 +17,10 @@ npm start            # 서버 하나가 dist/ + API 를 같은 주소로 내보�
 
 Node 22 이상.
 
+```bash
+npm run test:booth   # 체험 예약 규칙·문자 경로 검증 (약 3분, 문자는 나가지 않음)
+```
+
 ## 환경변수
 
 `.env` 를 만들어 채운다(변수 목록은 [docs/ENV.md](docs/ENV.md)). **`.env` 는 git 에 올라가지 않는다.**

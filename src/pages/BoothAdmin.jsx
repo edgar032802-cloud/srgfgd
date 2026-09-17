@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
 
-import { adminCancel, adminComplete, adminList, adminTest, formatPhone } from "../lib/booth.js"
+import {
+  adminCancel,
+  adminClose,
+  adminComplete,
+  adminList,
+  adminReopen,
+  adminTest,
+  formatPhone,
+} from "../lib/booth.js"
 import { readPassword, savePassword } from "../lib/adminSession.js"
 import "../components/booth.css"
 
@@ -63,8 +71,28 @@ export default function BoothAdmin() {
     }
   }
 
+  /** 마감·해제. 마감은 오늘 그 체험존의 새 예약을 모두 막으므로 한 번 더 묻는다. */
+  const toggleZone = async (id, label, closing) => {
+    if (closing && !window.confirm(`${label} 을(를) 오늘 마감할까요?\n방문자 화면에 "오늘은 마감되었어요"가 뜨고 새 예약을 받지 않습니다.`)) {
+      return
+    }
+    setBusy(`zone:${id}`)
+    try {
+      await (closing ? adminClose : adminReopen)(password, id)
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy("")
+    }
+  }
+
   const activities = data?.activities ?? {}
   const rows = data?.reservations ?? []
+  const zones = data?.zones ?? {}
+  const today = data?.today ?? ""
+  // 줄과 버튼은 **오늘** 것만. 지난날 기록은 이름 검색에서만 찾는다.
+  const todayRows = rows.filter((r) => r.day === today)
 
   return (
     <div className="admin">
@@ -77,27 +105,46 @@ export default function BoothAdmin() {
 
       {error ? <p className="book__error" role="alert">{error}</p> : null}
 
+      {today ? <p className="admin__today">{today} · 체험존마다 하루 {data.capacity}팀 · 한국 시각 00시에 초기화</p> : null}
+
       <ul className="admin__counts">
-        {Object.entries(activities).map(([id, a]) => (
-          <li key={id}>
-            <span>{a.label}</span>
-            <strong>{data.counts?.[id] ?? 0}팀</strong>
-          </li>
-        ))}
+        {Object.entries(activities).map(([id, a]) => {
+          const z = zones[id] ?? {}
+          return (
+            <li key={id} className={z.closed ? "is-closed" : undefined}>
+              <span>{a.label}</span>
+              <strong>대기 {z.waiting ?? 0}팀</strong>
+              <em>
+                완료 {z.done ?? 0} / {z.capacity ?? "-"}
+                {z.closed ? " · 마감" : z.full ? " · 정원 참" : ""}
+              </em>
+            </li>
+          )
+        })}
       </ul>
 
       <NotifyLine notify={data?.notify} password={password} />
 
-      <Search query={query} onQuery={setQuery} rows={rows} activities={activities} />
+      <Search query={query} onQuery={setQuery} rows={rows} activities={activities} today={today} />
 
       {Object.entries(activities).map(([id, a]) => {
-        const waiting = rows.filter((r) => r.activity === id && r.status === "waiting").sort((x, y) => x.ahead - y.ahead)
-        const closed = rows.filter((r) => r.activity === id && r.status !== "waiting")
+        const z = zones[id] ?? {}
+        const waiting = todayRows
+          .filter((r) => r.activity === id && r.status === "waiting")
+          .sort((x, y) => (x.ahead ?? 0) - (y.ahead ?? 0))
+        const closed = todayRows.filter((r) => r.activity === id && r.status !== "waiting")
         return (
           <section className="admin__group" key={id}>
             <h2>
               {a.label} <span>{a.title}</span>
             </h2>
+
+            <ZoneBar
+              zone={z}
+              busy={busy === `zone:${id}`}
+              onClose={() => toggleZone(id, a.label, true)}
+              onReopen={() => toggleZone(id, a.label, false)}
+            />
 
             {waiting.length === 0 ? (
               <p className="admin__empty">대기 중인 팀이 없습니다.</p>
@@ -110,7 +157,7 @@ export default function BoothAdmin() {
                       <strong>{r.name}</strong>
                       <span>
                         {formatPhone(r.phone)} · {r.dept} · {timeOf(r.createdAt)} 접수
-                        {r.calledAt ? " · 호출함" : ""}
+                        <CallupNote state={r.callup} />
                       </span>
                     </div>
                     <div className="admin__acts">
@@ -156,6 +203,56 @@ export default function BoothAdmin() {
 }
 
 /**
+ * 호출 문자 상태 한 마디. "호출함"은 실제로 나갔을 때만 쓴다 — 실패했는데
+ * 호출함으로 보이면 운영자는 불렀다고 믿고 기다린다.
+ */
+function CallupNote({ state }) {
+  if (state === "sent") return <> · 호출함</>
+  if (state === "skipped") return <> · 호출할 차례(문자 미연결)</>
+  if (state === "failed") return <b className="callup-fail"> · 호출 문자 실패 — 직접 불러 주세요</b>
+  return null
+}
+
+/**
+ * 체험존 하나의 오늘 상태와 마감 버튼.
+ *
+ * 마감은 **체험 완료가 정원 이상일 때만** 누를 수 있다. 그 전에는 버튼을 막아 두고
+ * 몇 팀 남았는지 적는다. 막는 것은 서버도 한 번 더 한다(화면만 믿지 않는다).
+ */
+function ZoneBar({ zone, busy, onClose, onReopen }) {
+  const done = zone.done ?? 0
+  const cap = zone.capacity ?? 0
+
+  if (zone.closed) {
+    return (
+      <div className="zone zone--closed">
+        <span>
+          <b>오늘 마감됨</b>
+          {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""} · 방문자에게 "오늘은 마감되었어요"가 보입니다
+        </span>
+        <button className="admin__ghost" type="button" disabled={busy} onClick={onReopen}>
+          마감 해제
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`zone ${zone.canClose ? "zone--ready" : ""}`}>
+      <span>
+        {zone.canClose
+          ? `체험 완료 ${done}팀 — 마감할 수 있습니다`
+          : `체험 완료 ${done} / ${cap}팀 · ${Math.max(0, cap - done)}팀 더 완료하면 마감할 수 있어요`}
+        {zone.full && !zone.canClose ? " · 정원이 차서 새 예약은 받지 않는 중" : ""}
+      </span>
+      <button className="zone__close" type="button" disabled={!zone.canClose || busy} onClick={onClose}>
+        마감
+      </button>
+    </div>
+  )
+}
+
+/**
  * 키 하나의 상태를 글자 수와 지문으로 보여 준다.
  *
  * 길이만으로는 부족하다 — 32자인데 다른 값일 수도 있다. 앞 여섯 자리 해시를
@@ -178,7 +275,7 @@ function Shape({ len, want, fp }) {
  * 활동별 상태를 한눈에 보여 준다. 번호 뒷자리로도 찾을 수 있다 — 동명이인이 있으면
  * 이름만으로는 가릴 수 없기 때문이다.
  */
-function Search({ query, onQuery, rows, activities }) {
+function Search({ query, onQuery, rows, activities, today }) {
   const q = query.trim()
   const digits = q.replace(/\D/g, "")
   const hits = q
@@ -223,6 +320,8 @@ function Search({ query, onQuery, rows, activities }) {
           <ul className="find__list">
             {p.list.map((r) => (
               <li key={r.id}>
+                {/* 지난날 기록도 찾히므로 날짜를 붙인다. 번호는 날마다 1번부터라 날짜 없이는 헷갈린다. */}
+                <span className="find__day">{r.day === today ? "오늘" : (r.day || "").slice(5).replace("-", "/")}</span>
                 <span className="find__act">{activities[r.activity]?.label ?? r.activity}</span>
                 <span className="find__no">{r.teamNo}번</span>
                 <StateTag row={r} />
@@ -239,6 +338,10 @@ function Search({ query, onQuery, rows, activities }) {
 function StateTag({ row }) {
   if (row.status === "done") return <span className="tag tag--done">완료</span>
   if (row.status === "cancelled") return <span className="tag tag--off">취소</span>
+  // 날이 바뀔 때까지 차례가 오지 않은 예약. 오늘 줄에는 없다.
+  if (row.status === "expired") return <span className="tag tag--off">만료</span>
+  if (typeof row.ahead !== "number") return <span className="tag">대기</span>
+  if (row.callup === "failed") return <span className="tag tag--fail">호출 실패 · 앞 {row.ahead}팀</span>
   if (row.ahead === 0) return <span className="tag tag--now">진행 중</span>
   if (row.calledAt) return <span className="tag tag--call">호출함 · 앞 {row.ahead}팀</span>
   return <span className="tag">대기 · 앞 {row.ahead}팀</span>
