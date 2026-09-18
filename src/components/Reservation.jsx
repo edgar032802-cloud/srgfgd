@@ -7,15 +7,38 @@ import {
   forgetBooking,
   formatPhone,
   readBookings,
+  readNotice,
   rememberBooking,
+  rememberNotice,
 } from "../lib/booth.js"
+import { holdReload } from "../lib/build.js"
+import { useLive } from "../lib/live.js"
 import "./booth.css"
-
-/** 대기 줄은 옆에서 계속 움직인다. 15초마다 조용히 다시 물어본다. */
-const POLL_MS = 15000
 
 /** 서버가 문구를 주지 못한 경우(구버전 서버 등)에만 쓰는 같은 문장. */
 const CLOSED_FALLBACK = "오늘은 마감되었어요. 내일 다시 만나요."
+
+/**
+ * "대기 줄이 새로 시작되었어요" 안내를 이 탭이 기억한다. 줄이 초기화된 걸 알아챈 뒤
+ * 화면이 새로 불러와지면(새 배포 등) 예약 기록은 이미 지워져 있어 안내가 사라진다.
+ */
+const restartKey = (activity) => `freesiaRestarted:${activity}`
+/** 초기화를 알아챈 날(서버 기준 한국 날짜). 날이 바뀌면 이 안내는 의미가 없다. */
+const readRestarted = (activity) => {
+  try {
+    return sessionStorage.getItem(restartKey(activity)) ?? ""
+  } catch {
+    return ""
+  }
+}
+const writeRestarted = (activity, day) => {
+  try {
+    if (day) sessionStorage.setItem(restartKey(activity), day)
+    else sessionStorage.removeItem(restartKey(activity))
+  } catch {
+    // 이번 화면에서만 보여 준다
+  }
+}
 
 /**
  * 체험 예약 한 벌 — 지금 몇 팀이 기다리는지, 이름·번호·학과, 그리고 내 순서.
@@ -36,16 +59,26 @@ export default function Reservation({ activity, title }) {
   /** 이 체험존이 새 예약을 받지 않는가(운영자가 마감했다). */
   const [shut, setShut] = useState(false)
   /** 들고 있던 예약이 줄 초기화(마감 해제)로 빠졌다 — 폼 위에 한 줄로 알린다. */
-  const [restarted, setRestarted] = useState(false)
+  const [restarted, setRestarted] = useState(() => Boolean(readRestarted(activity)))
   const [closedMessage, setClosedMessage] = useState(CLOSED_FALLBACK)
   const idRef = useRef(readBookings()[activity] ?? null)
   /**
    * 요청 순번. 새로고침 요청이 나간 뒤 예약이 먼저 끝나면, 늦게 도착한 옛 응답이
    * "당신 예약은 없다"며 방금 만든 예약을 지운다(검토에서 재현됨 — 마지막 자리를
-   * 잡은 사람이 "오늘은 마감되었어요"를 봤다). 상태를 바꾸는 일이 생길 때마다 순번을
-   * 올려, 그보다 먼저 출발한 응답은 버린다.
+   * 잡은 사람이 "오늘은 마감되었어요"를 봤다).
+   *
+   * 그래서 응답은 **이미 반영한 것보다 나중에 출발한 것만** 받는다(`appliedRef`).
+   * 예약처럼 화면이 직접 상태를 바꾸면 그때까지 출발한 요청을 모두 낡은 것으로 친다.
+   * 예전에는 "더 새 요청이 출발했으면 버린다"였는데, 느린 와이파이에서는 응답이 오기
+   * 전에 다음 요청이 계속 출발해 **어떤 응답도 반영되지 못했다** — 마감을 눌러도 화면이
+   * 그대로인 채 새로고침만이 답이 됐다.
    */
   const seqRef = useRef(0)
+  const appliedRef = useRef(0)
+  /** 화면이 직접 상태를 바꿨다 — 지금까지 출발한 요청의 답은 모두 낡았다. */
+  const settle = () => {
+    appliedRef.current = seqRef.current
+  }
 
   const refresh = useCallback(async () => {
     // 다른 탭에서 방금 예약했을 수 있다. 들고 있는 게 없으면 저장소를 다시 본다.
@@ -54,19 +87,32 @@ export default function Reservation({ activity, title }) {
     const asked = idRef.current
     try {
       const data = await fetchQueue(asked ?? undefined)
-      if (seq !== seqRef.current || idRef.current !== asked) return // 낡은 응답
+      if (seq <= appliedRef.current || idRef.current !== asked) return // 낡은 응답
+      appliedRef.current = seq
 
       setWaiting(data.counts?.[activity] ?? 0)
       setShut(Boolean(data.zones?.[activity]?.shut))
+      // 어제 알아챈 초기화 안내는 오늘 띄우지 않는다.
+      const restartedOn = readRestarted(activity)
+      if (restartedOn && data.today && restartedOn !== data.today) {
+        writeRestarted(activity, "")
+        setRestarted(false)
+      }
       if (data.closedMessage) setClosedMessage(data.closedMessage)
       setOffline(false)
       setLoaded(true)
       // 대기 중인 예약만 들고 있는다. 완료·취소된 것, **자정이 지나 만료된 것**, 그리고
       // **마감 해제로 줄이 새로 시작되며 빠진 것**은 버린다 — 옛 줄의 순서를 띄우면
       // "지금 입장해주세요"가 잘못 뜨거나, 새 줄의 같은 번호와 겹친다.
-      if (data.mine && data.mine.status === "waiting") setMine(data.mine)
-      else if (asked) {
-        if (data.mine?.status === "reset") setRestarted(true)
+      if (data.mine && data.mine.status === "waiting") {
+        setMine(data.mine)
+        // 새로 불러온 화면이면 예약할 때 받은 문자 결과를 되살린다("문자를 보내지 못했습니다").
+        setNotice((n) => n ?? readNotice(data.mine.id))
+      } else if (asked) {
+        if (data.mine?.status === "reset") {
+          setRestarted(true)
+          writeRestarted(activity, data.today || "1")
+        }
         idRef.current = null
         // 그 사이 다른 탭이 새 예약을 저장했으면 그것까지 지우지 않는다.
         if (readBookings()[activity] === asked) forgetBooking(activity)
@@ -74,14 +120,17 @@ export default function Reservation({ activity, title }) {
         setNotice(null)
       }
     } catch {
-      if (seq === seqRef.current) setOffline(true)
+      // 가장 최근에 출발한 요청이 실패했고, 그보다 새 답도 없을 때만 "못 불러왔다".
+      if (seq === seqRef.current && seq > appliedRef.current) setOffline(true)
+      return false // 곧 다시 묻는다(useLive)
     }
+    return true
   }, [activity])
 
+  // 처음 한 번, 서버가 "바뀌었다"고 알릴 때, 화면이 다시 보일 때, 그리고 주기적으로.
+  useLive(refresh, { fastMs: 5000, slowMs: 20000 })
+
   useEffect(() => {
-    refresh()
-    const timer = setInterval(refresh, POLL_MS)
-    const onFocus = () => refresh()
     // 같은 기기의 다른 탭이 예약하거나 지우면 곧바로 따라간다.
     const onStorage = (e) => {
       if (e.key !== null && e.key !== BOOKING_KEY) return
@@ -89,13 +138,8 @@ export default function Reservation({ activity, title }) {
       if (stored && stored !== idRef.current) idRef.current = stored
       refresh()
     }
-    window.addEventListener("focus", onFocus)
     window.addEventListener("storage", onStorage)
-    return () => {
-      clearInterval(timer)
-      window.removeEventListener("focus", onFocus)
-      window.removeEventListener("storage", onStorage)
-    }
+    return () => window.removeEventListener("storage", onStorage)
   }, [refresh, activity])
 
   const set = (key) => (event) => {
@@ -108,10 +152,14 @@ export default function Reservation({ activity, title }) {
     if (sending) return
     setError("")
     setSending(true)
+    // 예약이 오가는 동안 화면이 새로 불러와지면 됐는지 모른다. 문자 발송을 기다리느라 몇 초 걸린다.
+    holdReload(20000)
     try {
       const data = await book({ activity, ...form })
-      seqRef.current++ // 예약 전에 나간 새로고침 응답은 이제 낡았다
+      settle() // 예약 전에 나간 새로고침 응답은 이제 낡았다
       setRestarted(false)
+      writeRestarted(activity, "")
+      rememberNotice(data.reservation.id, data.notice)
       idRef.current = data.reservation.id
       rememberBooking(activity, data.reservation.id)
       setMine(data.reservation)
@@ -124,14 +172,14 @@ export default function Reservation({ activity, title }) {
     } catch (e) {
       if (e.code === "ALREADY_BOOKED" && e.data?.reservation) {
         // 이미 예약한 사람에게는 화내지 말고 자기 순서를 보여 준다.
-        seqRef.current++
+        settle()
         idRef.current = e.data.reservation.id
         rememberBooking(activity, e.data.reservation.id)
         setMine(e.data.reservation)
         setError("")
       } else if (e.code === "CLOSED") {
         // 폼을 채우는 사이에 마감됐다. 오류가 아니라 안내로 바꿔 보여 준다.
-        seqRef.current++
+        settle()
         setShut(true)
         if (e.message) setClosedMessage(e.message)
         setError("")
@@ -280,7 +328,7 @@ function Standing({ mine, notice, title }) {
             : "안내 문자를 보내지 못했습니다. 이 화면에서 순서를 확인해 주세요."}
         </p>
       ) : null}
-      <p className="standing__fine">이 화면은 15초마다 저절로 새로고침됩니다.</p>
+      <p className="standing__fine">순서가 바뀌면 이 화면에 바로 반영됩니다.</p>
     </div>
   )
 }

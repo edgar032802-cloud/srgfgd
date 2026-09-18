@@ -77,6 +77,24 @@ if (PROD && !ADMIN_PASSWORD) {
   )
 }
 
+/**
+ * 지금 배포된 화면 빌드의 이름(vite.config.js 가 dist/build.json 으로 내놓는다).
+ *
+ * 배포 전에 열어 둔 탭은 옛 화면 코드를 그대로 돌린다. 휴대폰 사파리는 탭을 며칠씩
+ * 살려 두므로 흔한 일이고, 옛 코드는 새 서버와 어긋난다(2026-09-18: 옛 운영 화면의
+ * 마감 버튼이 새 서버 앞에서 계속 막혀 "새로고침해야 된다"로 보였다). 응답마다 이
+ * 이름을 붙여 보내면 화면이 자기 이름과 비교해 스스로 한 번 새로 불러온다.
+ * 개발에서는 비워 둔다 — dist 가 지금 코드와 다를 수 있다.
+ */
+const BUILD_ID = (() => {
+  if (!PROD) return ""
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(HERE, "..", "dist", "build.json"), "utf8")).id ?? "")
+  } catch {
+    return ""
+  }
+})()
+
 /* -------------------------------------------------------------------- 시계 */
 
 /**
@@ -214,10 +232,23 @@ const statusOf = (r) => {
   return "waiting"
 }
 
-const aheadOf = (r) => {
+const aheadOf = (r, wait = waitingOn) => {
   if (statusOf(r) !== "waiting") return null
-  const i = waitingOn(r.activity, dayOf(r)).findIndex((x) => x.id === r.id)
+  const i = wait(r.activity, dayOf(r)).findIndex((x) => x.id === r.id)
   return i < 0 ? null : i
+}
+
+/**
+ * 한 번의 응답 안에서 같은 줄을 여러 번 계산하지 않게 기억해 둔다. 운영 목록은 예약마다
+ * 그 줄을 다시 훑어서 예약이 쌓일수록 제곱으로 느려졌다(1,200건에 800KB·14ms, 2,400건에 36ms).
+ */
+const memoWaiting = () => {
+  const seen = new Map()
+  return (activity, day) => {
+    const key = `${activity}|${day}`
+    if (!seen.has(key)) seen.set(key, waitingOn(activity, day))
+    return seen.get(key)
+  }
 }
 
 const counts = (day = today()) =>
@@ -244,6 +275,9 @@ const adminZones = (day = today()) =>
           closedAt: closed ? state.closed[day][id] : null,
           round: resets.length,
           resetAt: resets.at(-1) ?? null,
+          // 2026-09-18 이전 화면 코드는 이 값이 참일 때만 마감 버튼을 풀어 준다.
+          // 그 코드를 아직 돌리는 탭(배포 전에 열어 둔 것)에서도 마감이 눌리도록 남겨 둔다.
+          canClose: !closed,
         },
       ]
     })
@@ -252,14 +286,14 @@ const adminZones = (day = today()) =>
 /** 번호는 저장하되 밖으로는 뒤 네 자리만 보낸다. */
 const maskPhone = (phone) => (String(phone).length > 4 ? "***" + String(phone).slice(-4) : String(phone))
 
-const publicView = (r) => ({
+const publicView = (r, wait = waitingOn) => ({
   id: r.id,
   activity: r.activity,
   day: dayOf(r),
   teamNo: r.teamNo,
   status: statusOf(r),
-  ahead: aheadOf(r),
-  waiting: waitingOn(r.activity, dayOf(r)).length,
+  ahead: aheadOf(r, wait),
+  waiting: wait(r.activity, dayOf(r)).length,
   name: r.name,
   phoneMasked: maskPhone(r.phone),
   calledAt: r.calledAt ?? null,
@@ -282,8 +316,8 @@ function callupState(r) {
   return "pending"
 }
 
-const adminView = (r) => ({
-  ...publicView(r),
+const adminView = (r, wait = waitingOn) => ({
+  ...publicView(r, wait),
   phone: r.phone,
   dept: r.dept,
   createdAt: r.createdAt,
@@ -441,6 +475,7 @@ async function callUpOnce(activity, day) {
     }
   }
   save()
+  changed()
   return sent
 }
 
@@ -538,6 +573,97 @@ const requireAdmin = (req, res, next) => {
 
 const router = express.Router()
 
+/**
+ * 대기 현황은 매 순간 바뀐다. 브라우저·통신사 프록시·앱 안 웹뷰 어디에도 담아 두지
+ * 말라고 못 박는다. 운영자 응답에는 이름과 전화번호가 있어서 더더욱 남으면 안 된다.
+ */
+router.use((req, res, next) => {
+  res.set("Cache-Control", "no-store")
+  if (BUILD_ID) res.set("X-Build", BUILD_ID)
+  next()
+})
+
+/* ---------------------------------------------------------- 바뀜 알림(SSE) */
+
+/**
+ * 누가 예약하거나, 운영자가 완료·취소·마감·마감해제를 누르면 열려 있는 화면
+ * 전부에게 "바뀌었다"고 바로 알린다. 화면은 그 말을 듣고 자기 것을 다시 물어본다.
+ *
+ * 전에는 화면이 15초마다 묻기만 해서, 마감을 눌러도 다른 휴대폰에는 최대 15초 뒤에야
+ * 보였다. 휴대폰 사파리는 탭을 옮기거나 화면을 켤 때 그 주기를 더 늦춰서, 보는
+ * 사람에게는 "새로고침을 해야 된다"로 보였다.
+ *
+ * 알림에는 **번호 하나뿐**이다. 이름·번호 같은 것은 절대 싣지 않는다 — 누구나 받을
+ * 수 있는 통로다. 짧은 사이에 몰리면 한 번으로 묶는다. 끊겨도 화면이 원래대로
+ * 주기적으로 물어보므로 틀린 상태로 남지 않는다. 늦어질 뿐이다.
+ */
+const MAX_STREAMS = 3000
+const HEARTBEAT_MS = 20_000
+const COALESCE_MS = 120
+const streams = new Set()
+let rev = 0
+let pendingBroadcast = null
+
+function changed() {
+  rev++
+  if (pendingBroadcast) return
+  pendingBroadcast = setTimeout(() => {
+    pendingBroadcast = null
+    const line = `data: ${JSON.stringify({ v: rev })}\n\n`
+    for (const res of streams) {
+      if (res.writableEnded || res.destroyed) streams.delete(res)
+      else res.write(line)
+    }
+  }, COALESCE_MS)
+  pendingBroadcast.unref?.()
+}
+
+// 아무 일이 없어도 가끔 한 줄 보낸다. 중간의 프록시가 조용한 연결을 끊지 않도록.
+setInterval(() => {
+  for (const res of streams) {
+    if (res.writableEnded || res.destroyed) streams.delete(res)
+    else res.write(": ping\n\n")
+  }
+}, HEARTBEAT_MS).unref?.()
+
+/** 한국 00시에도 한 번 알린다. 날이 바뀌면 줄이 비고 마감이 풀린다. */
+function scheduleMidnight() {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const now = nowMs()
+  const next = Math.floor((now + KST_OFFSET_MS) / DAY_MS) * DAY_MS + DAY_MS - KST_OFFSET_MS
+  setTimeout(() => {
+    changed()
+    scheduleMidnight()
+  }, next - now + 1000).unref?.()
+}
+scheduleMidnight()
+
+router.get("/events", (req, res) => {
+  // Express 는 GET 경로로 HEAD 도 받는다. HEAD 를 스트림으로 붙잡으면 응답이 끝나지 않아
+  // 그 연결로 오는 다음 요청(마감·예약)이 처리는 되는데 답이 돌아가지 않는다.
+  if (req.method !== "GET") return res.status(405).set("Allow", "GET").end()
+  if (streams.size >= MAX_STREAMS) {
+    // 화면은 알림 없이 주기적으로 묻는 쪽으로 돌아간다.
+    return res.status(503).json({ error: "BUSY", message: "잠시 후 다시 연결합니다." })
+  }
+  res.status(200)
+  res.set({
+    "Content-Type": "text/event-stream; charset=utf-8",
+    Connection: "keep-alive",
+    // 중간 프록시가 모아 두었다가 한꺼번에 보내지 않도록
+    "X-Accel-Buffering": "no",
+  })
+  res.flushHeaders()
+  res.write("retry: 3000\n\n")
+  // 새로 이어질 때마다 화면이 한 번 다시 묻는다 — 끊겨 있던 사이 바뀐 것을 따라잡는다.
+  res.write(`event: hello\ndata: ${JSON.stringify({ v: rev, build: BUILD_ID })}\n\n`)
+  streams.add(res)
+  const drop = () => streams.delete(res)
+  req.on("close", drop)
+  res.on("close", drop)
+  res.on("error", drop)
+})
+
 /** 대기 팀 수와 오늘 받는지. 예약 id 를 함께 주면 그 예약의 현재 순서까지 돌려준다. */
 router.get("/queue", (req, res) => {
   const day = today()
@@ -597,6 +723,7 @@ router.post("/reservations", async (req, res) => {
 
   const ahead = aheadOf(reservation)
   save()
+  changed()
 
   // 1) 접수 확인. 이 문자는 "받았습니다"만 말한다.
   const result = await sendMessage({
@@ -625,6 +752,7 @@ router.post("/admin/list", requireAdmin, (req, res) => {
   const day = today()
   // 검색은 지난날 기록까지 찾아야 하므로 전부 보낸다. 날짜별 묶음은 화면이 나눈다.
   const rows = [...state.reservations].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+  const wait = memoWaiting()
   res.json({
     today: day,
     closedMessage: CLOSED_MESSAGE,
@@ -632,9 +760,26 @@ router.post("/admin/list", requireAdmin, (req, res) => {
     zones: adminZones(day),
     activities: ACTIVITIES,
     notify: { ...notifyStatus(), lastError: lastNotifyError() },
-    reservations: rows.map(adminView),
+    reservations: rows.map((r) => adminView(r, wait)),
   })
 })
+
+/** 체험존 넷의 상태만. 마감 버튼 판이 쓴다 — 명단(이름·번호)을 매번 실어 보내지 않는다. */
+router.post("/admin/zones", requireAdmin, (req, res) => {
+  const day = today()
+  res.json({ today: day, activities: ACTIVITIES, zones: adminZones(day) })
+})
+
+/**
+ * 마감·해제는 **이 화면 이름(X-Client-Build)을 싣는 화면에서만** 받는다.
+ *
+ * 2026-09-18 이전 화면은 해제를 되묻지 않았다. 그때는 해제가 "마감 취소"일 뿐이었지만
+ * 지금은 줄을 비운다. 그 화면이 아직 열려 있는 휴대폰에서 해제를 누르면 기다리던 팀이
+ * 아무 경고 없이 사라진다. 옛 화면에는 "새로고침해 주세요"를 돌려준다 — 새 화면은
+ * 이 이름을 항상 싣는다.
+ */
+const RELOAD = { error: "RELOAD", message: "화면이 예전 것입니다. 새로고침한 뒤 다시 눌러 주세요." }
+const fromCurrentScreen = (req) => Boolean(req.get("X-Client-Build"))
 
 /** 줄에서 빼는 두 동작(완료·취소)의 공통 부분. 오늘 대기 중인 예약만 받는다. */
 function closeOne(req, res, status) {
@@ -647,6 +792,7 @@ function closeOne(req, res, status) {
   r.status = status
   r.doneAt = isoAt(nowMs())
   save()
+  changed()
 
   // 응답을 먼저 돌려준다. 호출 문자는 체험존마다 한 줄로 서서 차례로 나가므로,
   // 기다리면 여러 통을 보내는 중일 때 운영자의 버튼이 몇 초씩 멈춘다.
@@ -670,11 +816,13 @@ router.post("/admin/cancel", requireAdmin, (req, res) => closeOne(req, res, "can
 router.post("/admin/close", requireAdmin, (req, res) => {
   const activity = activityOf(req.body)
   if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
+  if (!fromCurrentScreen(req)) return res.status(409).json(RELOAD)
 
   const day = today()
   if (!closedOn(activity, day)) {
     state.closed[day] = { ...(state.closed[day] ?? {}), [activity]: isoAt(nowMs()) }
     save()
+    changed()
   }
   res.json({ ok: true, zones: adminZones(day) })
 })
@@ -694,11 +842,21 @@ router.post("/admin/reopen", requireAdmin, (req, res) => {
   const activity = activityOf(req.body)
   if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
 
+  if (!fromCurrentScreen(req)) return res.status(409).json(RELOAD)
+
   const day = today()
   if (!closedOn(activity, day)) return res.json({ ok: true, reset: false, dropped: 0, zones: adminZones(day) })
 
-  const at = isoAt(nowMs())
   const left = waitingOn(activity, day)
+  // 줄을 비우는 것은 "대기 N팀이 빠집니다"를 확인받은 요청만. 화면이 확인 창을 띄운 뒤 싣는다.
+  if (left.length && req.body?.reset !== true) {
+    return res.status(409).json({
+      error: "CONFIRM_RESET",
+      message: `대기 중인 ${left.length}팀이 줄에서 빠집니다. 새로고침한 뒤 다시 눌러 확인해 주세요.`,
+      waiting: left.length,
+    })
+  }
+  const at = isoAt(nowMs())
   for (const r of left) {
     r.status = "reset"
     r.doneAt = at
@@ -708,6 +866,7 @@ router.post("/admin/reopen", requireAdmin, (req, res) => {
   state.closed[day] = rest
   state.resets[day] = { ...(state.resets[day] ?? {}), [activity]: [...resetsOn(activity, day), at] }
   save()
+  changed()
   res.json({ ok: true, reset: true, dropped: left.length, zones: adminZones(day) })
 })
 

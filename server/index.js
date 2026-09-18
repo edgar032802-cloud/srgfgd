@@ -215,6 +215,12 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`[server] TOSS_SECRET_KEY ${TOSS_SECRET_KEY ? "loaded" : "MISSING — /api/payments/confirm will refuse"}`)
 })
 
+// 배포에서는 앞에 프록시(Railway)가 서서 연결을 재사용한다. 노드 기본값(5초)이 프록시보다
+// 먼저 연결을 닫으면, 그 사이에 들어온 요청이 가끔 502 로 끝난다 — 사용자에게는
+// 버튼이 한 번에 안 먹는 것으로 보인다. 프록시보다 오래 열어 둔다.
+server.keepAliveTimeout = 65_000
+server.headersTimeout = 66_000
+
 // Fail loudly. Silently losing the port is what made the site flaky.
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {

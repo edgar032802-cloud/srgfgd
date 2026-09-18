@@ -56,8 +56,9 @@ async function startServer(port, extraEnv = {}) {
     } catch {}
   }
   const base = `http://127.0.0.1:${port}/api/booth`
-  const post = async (p, body) => {
-    const r = await fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+  // 지금 화면은 빌드 이름(X-Client-Build)을 싣는다. 옛 화면을 흉내 낼 때는 headers 를 비워 보낸다.
+  const post = async (p, body, headers = { "X-Client-Build": "test" }) => {
+    const r = await fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) })
     return { s: r.status, d: await r.json().catch(() => ({})) }
   }
   const get = async (p) => {
@@ -103,7 +104,17 @@ try {
   ok("방문자 화면 대기 수 150", q1.d.counts?.register === 150, String(q1.d.counts?.register))
   ok("응답에 정원 값이 더는 없다", !("capacity" in q1.d))
   const zA = (await admin(S)).d.zones.register
-  ok("운영 화면에도 정원·자동 마감 표시 없음", !("capacity" in zA) && !("full" in zA) && !("canClose" in zA), Object.keys(zA).join(","))
+  ok("운영 화면에도 정원·자동 마감 표시 없음", !("capacity" in zA) && !("full" in zA), Object.keys(zA).join(","))
+  // canClose 는 정원 조건이 아니라 "열려 있으면 참" — 배포 전에 열어 둔 옛 화면 코드가 마감 버튼을 풀도록.
+  ok("150팀이어도 마감은 언제든 누를 수 있다(canClose=true)", zA.canClose === true)
+  // 운영 목록은 줄 계산을 한 번만 하도록 바꿨다(예약마다 전체를 훑으면 제곱으로 느려진다). 결과는 같아야 한다.
+  const listA = (await admin(S)).d.reservations.filter((r) => r.activity === "register")
+  const aheads = listA.map((r) => r.ahead).sort((a, b) => a - b)
+  ok("운영 목록의 순서 150개가 0..149 로 빠짐없이", aheads.join() === Array.from({ length: 150 }, (_, i) => i).join())
+  ok("운영 목록의 순서가 대기번호 순서와 같다", listA.every((r) => r.ahead === r.teamNo - 1))
+  ok("운영 목록의 대기 수가 전부 150", listA.every((r) => r.waiting === 150))
+  const mine1 = (await S.get(`/queue?id=${listA.find((r) => r.teamNo === 77).id}`)).d.mine
+  ok("방문자 조회의 순서도 같다(77번 → 앞 76팀)", mine1.ahead === 76 && mine1.waiting === 150)
 
   console.log("\n━━ A2. 취소해도 번호는 재사용하지 않는다")
   const victim = (await admin(S)).d.reservations.find((r) => r.activity === "register" && r.teamNo === 50)
@@ -147,8 +158,21 @@ try {
   const farOld = rw[10] // 앞 10팀 — 아직 호출되지 않은 팀
   ok("앞 10팀은 아직 호출 없음", JSON.stringify(await notices(S, farOld.id)) === '["booked"]')
 
+  console.log("\n━━ B1. 옛 화면·확인 없는 해제는 줄을 비우지 않는다")
+  const oldClose = await S.post("/admin/close", { password: PW, activity: "seek" }, {})
+  ok("빌드 이름 없는(옛) 화면의 마감 → 409 RELOAD", oldClose.s === 409 && oldClose.d.error === "RELOAD", `${oldClose.s} ${oldClose.d.error}`)
+  ok("옛 화면 마감 거절 문구에 새로고침 안내", /새로고침/.test(oldClose.d.message ?? ""), oldClose.d.message)
+  ok("거절된 마감은 아무것도 바꾸지 않았다", (await S.get("/queue")).d.zones.seek.shut === false)
+  const oldReopen = await S.post("/admin/reopen", { password: PW, activity: "register", reset: true }, {})
+  ok("빌드 이름 없는(옛) 화면의 해제 → 409 RELOAD", oldReopen.s === 409 && oldReopen.d.error === "RELOAD")
+  const noConfirm = await S.post("/admin/reopen", { password: PW, activity: "register" })
+  ok("대기 팀이 있는데 확인 표시(reset) 없이 해제 → 409 CONFIRM_RESET", noConfirm.s === 409 && noConfirm.d.error === "CONFIRM_RESET", `${noConfirm.s} ${noConfirm.d.error}`)
+  ok("그 응답에 빠질 팀 수(147)", noConfirm.d.waiting === 147, String(noConfirm.d.waiting))
+  const stillZ = (await admin(S)).d.zones.register
+  ok("거절된 해제 뒤에도 마감 유지 · 대기 147 그대로", stillZ.closed === true && stillZ.waiting === 147 && stillZ.round === 0)
+
   console.log("\n━━ B2. 마감해제 — 그 체험존의 줄이 처음부터 다시")
-  const reopen = await S.post("/admin/reopen", { password: PW, activity: "register" })
+  const reopen = await S.post("/admin/reopen", { password: PW, activity: "register", reset: true })
   ok("마감 해제 성공", reopen.s === 200 && reopen.d.zones.register.closed === false)
   ok("해제가 초기화로 처리됨(reset=true)", reopen.d.reset === true)
   ok("남아 있던 대기 147팀이 줄에서 빠짐", reopen.d.dropped === 147, String(reopen.d.dropped))
@@ -203,7 +227,7 @@ try {
   console.log("\n━━ B3. 마감 → 해제를 한 번 더")
   await S.post("/admin/close", { password: PW, activity: "register" })
   ok("다시 마감되면 예약 막힘", (await book(S, "register", 9100)).s === 409)
-  const reopen2 = await S.post("/admin/reopen", { password: PW, activity: "register" })
+  const reopen2 = await S.post("/admin/reopen", { password: PW, activity: "register", reset: true })
   ok("두 번째 초기화 — 새 줄 3팀이 빠짐", reopen2.d.reset === true && reopen2.d.dropped === 3, String(reopen2.d.dropped))
   ok("줄 순번 2", reopen2.d.zones.register.round === 2)
   ok("다시 1번부터", (await book(S, "register", 9101)).d.reservation?.teamNo === 1)
@@ -306,7 +330,7 @@ try {
     seekNext.d.reservation?.teamNo === seekMaxBefore + 1,
     String(seekNext.d.reservation?.teamNo)
   )
-  const reopen3 = await S2.post("/admin/reopen", { password: PW, activity: "register" })
+  const reopen3 = await S2.post("/admin/reopen", { password: PW, activity: "register", reset: true })
   ok("재시작 후 해제도 초기화로 동작(대기 1팀 빠짐, 순번 3)", reopen3.d.reset === true && reopen3.d.dropped === 1 && reopen3.d.zones.register.round === 3)
   ok("재시작 후 해제 → 다시 1번", (await book(S2, "register", 2002)).d.reservation?.teamNo === 1)
   await S2.stop()
@@ -332,7 +356,7 @@ try {
   // 감각추구는 자정 전에 마감 → 해제(초기화)를 한 번 해 둔다. 순번 1 인 줄에 남은 예약이 자정을 넘긴다.
   await book(M, "seek", 20)
   await M.post("/admin/close", { password: PW, activity: "seek" })
-  const seekReset = await M.post("/admin/reopen", { password: PW, activity: "seek" })
+  const seekReset = await M.post("/admin/reopen", { password: PW, activity: "seek", reset: true })
   ok("자정 전: 감각추구 초기화(순번 1)", seekReset.d.reset === true && seekReset.d.zones.seek.round === 1)
   const leftover = await book(M, "seek", 10) // 자정 넘어서도 대기로 남을 예약
   ok("자정 전: 초기화 뒤 감각추구 1번 · 앞 0팀", leftover.d.reservation?.teamNo === 1 && leftover.d.reservation?.ahead === 0)

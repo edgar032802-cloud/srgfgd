@@ -103,7 +103,7 @@ async function start(port, extra = {}, dataDir) {
   }
   const base = `http://127.0.0.1:${port}/api/booth`
   const post = async (p, b) => {
-    const r = await fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) })
+    const r = await fetch(base + p, { method: "POST", headers: { "Content-Type": "application/json", "X-Client-Build": "test" }, body: JSON.stringify(b) })
     return { s: r.status, d: await r.json().catch(() => ({})) }
   }
   const get = async (p) => (await fetch(base + p)).json()

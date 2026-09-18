@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   adminCancel,
@@ -11,9 +11,9 @@ import {
   zoneConfirmText,
 } from "../lib/booth.js"
 import { readPassword, savePassword } from "../lib/adminSession.js"
+import { holdReload } from "../lib/build.js"
+import { signalZonesChanged, useLive } from "../lib/live.js"
 import "../components/booth.css"
-
-const POLL_MS = 10000
 
 const timeOf = (iso) => {
   const d = new Date(iso)
@@ -31,63 +31,114 @@ export default function BoothAdmin() {
   const [data, setData] = useState(null)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState("")
+  /** 마감·해제를 보내는 중인 체험존. 줄의 완료·취소와 따로 센다. */
+  const [zoneBusy, setZoneBusy] = useState("")
+  /** 체험존마다 방금 누른 결과 한 줄. 화면 맨 위가 아니라 그 버튼 바로 밑에 띄운다. */
+  const [zoneNotes, setZoneNotes] = useState({})
   const [query, setQuery] = useState("")
+  /** 같은 순간 두 번 눌려도 한 번만 보낸다. 상태는 다음 그림에서야 바뀐다. */
+  const zoneBusyRef = useRef(false)
+  /**
+   * 목록 요청 순번. 누르기 전에 출발한 목록 응답이 늦게 도착해 방금 바뀐 버튼과 줄을
+   * 옛 모양으로 되돌리던 경합을 막는다 — 이미 반영한 것보다 나중에 출발한 응답만 받고,
+   * 무언가를 누르면 그때까지 출발한 요청을 모두 낡은 것으로 친다.
+   */
+  const seqRef = useRef(0)
+  const appliedRef = useRef(0)
+  const settle = () => {
+    appliedRef.current = seqRef.current
+  }
 
-  const load = useCallback(
-    async (pw) => {
-      const key = pw ?? password
-      if (!key) return
-      try {
-        setData(await adminList(key))
-        setError("")
-      } catch (e) {
-        setError(e.message)
-        if (e.code === "BAD_PASSWORD") {
-          setPassword("")
-          savePassword("")
-        }
+  const load = useCallback(async () => {
+    if (!password) return
+    const seq = ++seqRef.current
+    try {
+      const next = await adminList(password)
+      if (seq <= appliedRef.current) return true
+      appliedRef.current = seq
+      setData(next)
+      setError("")
+      return true
+    } catch (e) {
+      if (seq !== seqRef.current || seq <= appliedRef.current) return false
+      setError(e.message)
+      if (e.code === "BAD_PASSWORD") {
+        setPassword("")
+        savePassword("")
       }
-    },
-    [password]
-  )
+      return false
+    }
+  }, [password])
 
+  // 처음 한 번, 서버가 "바뀌었다"고 알릴 때, 화면이 다시 보일 때, 그리고 주기적으로.
+  // 이 화면은 한 번에 명단 전체를 받으므로, 줄이 몰릴 때는 알림을 2.5초씩 묶는다.
+  // (내가 누른 것은 서버의 답으로 곧바로 반영하니 이 간격과 상관없다.)
+  useLive(load, { fastMs: 5000, slowMs: 15000, minGapMs: 2500 })
+  // 이 화면에서 비밀번호를 막 넣은 경우 — 다음 주기를 기다리지 않고 곧바로 부른다.
   useEffect(() => {
-    if (!password) return undefined
     load()
-    const timer = setInterval(load, POLL_MS)
-    return () => clearInterval(timer)
-  }, [password, load])
+  }, [load])
 
   if (!password) return <Gate onPass={(pw) => { savePassword(pw); setPassword(pw) }} />
 
   const act = async (fn, id) => {
     setBusy(id)
+    settle()
+    holdReload(15000)
     try {
       await fn(password, id)
-      await load()
+      // 그 줄을 곧바로 목록에서 뺀다. 명단을 다시 받아 오는 몇 초 동안 버튼이 다시 살아 있으면
+      // 운영자가 한 번 더 누르고 "이미 끝난 예약"을 보게 된다.
+      const status = fn === adminComplete ? "done" : "cancelled"
+      setData((d) =>
+        d ? { ...d, reservations: d.reservations.map((r) => (r.id === id ? { ...r, status, doneAt: new Date().toISOString() } : r)) } : d
+      )
+      signalZonesChanged()
     } catch (e) {
       setError(e.message)
     } finally {
+      settle()
       setBusy("")
     }
+    // 성공이든 실패든 실제 상태로 맞춘다 — 다른 기기가 먼저 끝낸 줄(409)도 곧바로 사라진다.
+    load()
   }
 
   /**
    * 마감·해제. 마감은 새 예약을 모두 막고, 해제는 그 체험존의 줄을 처음부터 다시
    * 시작하므로(대기 0, 다음 예약 1번) 둘 다 한 번 더 묻는다.
+   *
+   * 버튼은 **서버의 답으로 곧바로** 바꾼다. 예전에는 답을 버리고 목록 전체를 다시
+   * 받아 온 뒤에야 바뀌어서, 느린 연결에서는 눌러도 그대로인 것처럼 보였다.
    */
   const toggleZone = async (id, label, closing) => {
+    if (zoneBusyRef.current) return
     const waitingNow = data?.zones?.[id]?.waiting ?? 0
     if (!window.confirm(zoneConfirmText(label, closing, waitingNow))) return
-    setBusy(`zone:${id}`)
+    zoneBusyRef.current = true
+    setZoneBusy(id)
+    setZoneNotes((n) => ({ ...n, [id]: null }))
+    settle()
+    holdReload(15000)
     try {
-      await (closing ? adminClose : adminReopen)(password, id)
-      await load()
+      const res = await (closing ? adminClose : adminReopen)(password, id)
+      settle()
+      setData((d) => (d && res.zones ? { ...d, zones: res.zones } : d))
+      signalZonesChanged()
+      const text = closing
+        ? "마감했습니다. 새 예약을 받지 않습니다."
+        : res.reset === false
+          ? "이미 예약을 받는 중이라 초기화하지 않았습니다."
+          : `마감을 해제했습니다. ${res.dropped ? `대기 ${res.dropped}팀을 빼고 ` : ""}1번부터 다시 받습니다.`
+      setZoneNotes((n) => ({ ...n, [id]: { text, closed: Boolean(res.zones?.[id]?.closed) } }))
     } catch (e) {
-      setError(e.message)
+      setZoneNotes((n) => ({ ...n, [id]: { text: e.message, error: true } }))
     } finally {
-      setBusy("")
+      settle()
+      zoneBusyRef.current = false
+      setZoneBusy("")
     }
+    load()
   }
 
   const activities = data?.activities ?? {}
@@ -148,7 +199,9 @@ export default function BoothAdmin() {
 
             <ZoneBar
               zone={z}
-              busy={busy === `zone:${id}`}
+              busy={zoneBusy === id}
+              locked={Boolean(zoneBusy)}
+              note={zoneNotes[id]}
               onClose={() => toggleZone(id, a.label, true)}
               onReopen={() => toggleZone(id, a.label, false)}
             />
@@ -225,33 +278,45 @@ function CallupNote({ state }) {
  * 닫히는 일은 없다), 마감된 체험존은 버튼이 "마감해제"로 바뀐다. 해제하면 그
  * 체험존의 줄이 처음부터 다시 시작한다.
  */
-function ZoneBar({ zone, busy, onClose, onReopen }) {
+function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
   const done = zone.done ?? 0
   const since = zone.resetAt ? ` · ${timeOf(zone.resetAt)} 초기화 이후` : ""
+  // 결과 한 줄은 그 결과가 아직 맞을 때만. 다른 기기가 상태를 바꿨으면 감춘다.
+  const line = note && (note.error || note.closed === Boolean(zone.closed)) ? (
+    <p className={note.error ? "zone__note zone__note--error" : "zone__note"} role={note.error ? "alert" : "status"}>
+      {note.text}
+    </p>
+  ) : null
 
   if (zone.closed) {
     return (
-      <div className="zone zone--closed">
-        <span>
-          <b>마감됨</b>
-          {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""} · 방문자에게 "오늘은 마감되었어요"가 보입니다
-        </span>
-        <button className="zone__open" type="button" disabled={busy} onClick={onReopen}>
-          마감해제
-        </button>
-      </div>
+      <>
+        <div className="zone zone--closed">
+          <span>
+            <b>마감됨</b>
+            {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""} · 방문자에게 "오늘은 마감되었어요"가 보입니다
+          </span>
+          <button className="zone__open" type="button" disabled={locked} onClick={onReopen}>
+            {busy ? "처리 중" : "마감해제"}
+          </button>
+        </div>
+        {line}
+      </>
     )
   }
 
   return (
-    <div className="zone">
-      <span>
-        <b>예약 받는 중</b> · 체험 완료 {done}팀{since}
-      </span>
-      <button className="zone__close" type="button" disabled={busy} onClick={onClose}>
-        마감
-      </button>
-    </div>
+    <>
+      <div className="zone">
+        <span>
+          <b>예약 받는 중</b> · 체험 완료 {done}팀{since}
+        </span>
+        <button className="zone__close" type="button" disabled={locked} onClick={onClose}>
+          {busy ? "처리 중" : "마감"}
+        </button>
+      </div>
+      {line}
+    </>
   )
 }
 

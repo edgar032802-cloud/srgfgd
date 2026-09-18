@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "dev:web": "vite",
-    "test:booth": "node tests/booth-rules.test.mjs && node tests/booth-sms.test.mjs"
+    "test:booth": "node tests/booth-rules.test.mjs && node tests/booth-sms.test.mjs && vite build && node tests/booth-live.test.mjs"
   },
   "engines": {
     "node": ">=22"

@@ -1,4 +1,10 @@
+import { CLIENT_BUILD, checkBuild } from "./build.js"
+
+/** 읽기 요청이 이보다 오래 걸리면 버린다. 매달린 요청 하나가 화면을 붙잡지 않게. */
+const READ_TIMEOUT_MS = 10000
+
 async function json(response) {
+  checkBuild(response.headers.get("X-Build"))
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
     const err = new Error(data.message ?? data.error ?? `HTTP ${response.status}`)
@@ -9,31 +15,60 @@ async function json(response) {
   return data
 }
 
-const post = (path, body) =>
-  fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(json)
+/**
+ * `timeout` 은 **읽기에만** 준다. 예약·마감 같은 쓰기는 서버가 문자를 보내느라 몇 초
+ * 걸릴 수 있고, 중간에 끊으면 서버에서는 됐는데 화면은 실패로 안다.
+ */
+function request(path, init = {}, timeout = 0) {
+  const ctrl = timeout ? new AbortController() : null
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeout) : 0
+  // 이 화면의 빌드 이름을 싣는다. 서버는 이것이 없는 옛 화면의 마감·해제를 "새로고침해
+  // 주세요"로 거절한다 — 옛 화면의 해제 버튼은 되묻지 않고 줄을 비워 버린다.
+  const headers = { ...(init.headers ?? {}), "X-Client-Build": CLIENT_BUILD }
+  return fetch(path, { cache: "no-store", ...init, headers, signal: ctrl?.signal })
+    .catch((e) => {
+      // 브라우저마다 영어("Load failed", "signal is aborted")로 떨어진다. 화면에 뜨는 말로 바꾼다.
+      const err = new Error(
+        e?.name === "AbortError" ? "응답이 늦습니다. 잠시 후 다시 시도해 주세요." : "연결이 끊겼습니다. 잠시 후 다시 시도해 주세요."
+      )
+      err.code = e?.name === "AbortError" ? "TIMEOUT" : "NETWORK"
+      throw err
+    })
+    .then(json)
+    .finally(() => clearTimeout(timer))
+}
+
+const post = (path, body, timeout) =>
+  request(
+    path,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+    timeout
+  )
 
 /** 활동별 대기 팀 수. id 를 주면 내 순서까지 함께 온다. */
 export function fetchQueue(id) {
   const q = id ? `?id=${encodeURIComponent(id)}` : ""
-  return fetch(`/api/booth/queue${q}`).then(json)
+  return request(`/api/booth/queue${q}`, {}, READ_TIMEOUT_MS)
 }
 
 export function book({ activity, name, phone, dept }) {
   return post("/api/booth/reservations", { activity, name, phone, dept })
 }
 
-export const adminList = (password) => post("/api/booth/admin/list", { password })
+export const adminList = (password) => post("/api/booth/admin/list", { password }, READ_TIMEOUT_MS)
+/** 체험존 넷의 상태만. 마감 버튼 판은 명단이 필요 없다 — 이름·번호를 매번 받아 오지 않는다. */
+export const adminZones = (password) => post("/api/booth/admin/zones", { password }, READ_TIMEOUT_MS)
 export const adminComplete = (password, id) => post("/api/booth/admin/complete", { password, id })
 export const adminCancel = (password, id) => post("/api/booth/admin/cancel", { password, id })
 export const adminTest = (password, phone) => post("/api/booth/admin/test", { password, phone })
 /** 이 체험존 마감 — 새 예약을 받지 않는다. 이미 선 줄은 그대로 진행된다. */
 export const adminClose = (password, activity) => post("/api/booth/admin/close", { password, activity })
-/** 마감 해제 — 그 체험존의 줄을 처음부터 다시 시작한다(다음 예약이 1번). */
-export const adminReopen = (password, activity) => post("/api/booth/admin/reopen", { password, activity })
+/**
+ * 마감 해제 — 그 체험존의 줄을 처음부터 다시 시작한다(다음 예약이 1번).
+ * `reset: true` 는 "대기 팀이 빠진다고 확인받았다"는 뜻이다. 서버는 이것 없이 대기 팀을
+ * 비우지 않는다 — 되묻지 않던 옛 화면이 줄을 통째로 날리는 것을 막는다.
+ */
+export const adminReopen = (password, activity) => post("/api/booth/admin/reopen", { password, activity, reset: true })
 
 /**
  * 마감·해제 전에 한 번 더 묻는 문장. 푸터 입구와 운영 화면이 같은 말을 쓴다.
@@ -74,6 +109,33 @@ export function rememberBooking(activity, id) {
     localStorage.setItem(KEY, JSON.stringify({ ...readBookings(), [activity]: id }))
   } catch {
     // 저장소를 못 쓰는 브라우저 — 이번 화면에서만 순서를 보여 준다.
+  }
+}
+
+const NOTICE_KEY = "freesiaNotices"
+
+/**
+ * 예약할 때 받은 안내 문자 결과를 예약 id 별로 기억한다. 화면이 새로 불러와지면(직접
+ * 새로고침하거나, 새 배포로 스스로 새로 불러오거나) 이 경고가 사라져, 문자가 안 갔는데도
+ * 기다리는 사람이 생긴다.
+ */
+export function rememberNotice(id, notice) {
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_KEY) ?? "{}") ?? {}
+    // 오래된 것은 버린다 — 하루에 몇 개 안 되지만 끝없이 쌓이지 않게.
+    const kept = Object.fromEntries(Object.entries(all).slice(-20))
+    localStorage.setItem(NOTICE_KEY, JSON.stringify({ ...kept, [id]: { status: notice?.status ?? "" } }))
+  } catch {
+    // 무시
+  }
+}
+
+export function readNotice(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_KEY) ?? "{}") ?? {}
+    return all[id]?.status ? { status: all[id].status } : null
+  } catch {
+    return null
   }
 }
 

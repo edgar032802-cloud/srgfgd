@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 
-import { adminClose, adminList, adminReopen, zoneConfirmText } from "../lib/booth.js"
+import { adminClose, adminList, adminReopen, adminZones, zoneConfirmText } from "../lib/booth.js"
+import { holdReload } from "../lib/build.js"
+import { signalZonesChanged, useLive } from "../lib/live.js"
 import { savePassword } from "../lib/adminSession.js"
 import "../components/booth.css"
 
 /** 다섯 번을 이 시간 안에 눌러야 한 묶음으로 친다. */
 const WINDOW_MS = 2500
 const TAPS = 5
-
-/** 마감 버튼 판이 열려 있는 동안 체험존 상태를 다시 묻는 간격. */
-const ZONE_POLL_MS = 10000
 
 /**
  * 푸터. 로고 옆에 이름 · 학생회 · 주소를 위에서 아래로 쌓는다.
@@ -168,49 +167,71 @@ function AdminGate({ onClose }) {
  *
  * 마감한 체험존의 버튼은 "마감해제"로 바뀐다. 해제하면 그 체험존의 줄이 처음부터
  * 다시 시작하므로(대기 0, 다음 예약 1번), 누르기 전에 한 번 더 묻고 남은 대기 팀
- * 수를 알려 준다. 다른 기기에서 누른 마감도 보이도록 열려 있는 동안 다시 묻는다.
+ * 수를 알려 준다. 다른 기기에서 누른 마감도 보이도록 열려 있는 동안 따라간다.
+ *
+ * 버튼은 **서버의 답으로 곧바로** 바뀐다. 목록을 다시 묻는 요청이 마감보다 먼저
+ * 출발해 늦게 도착하면 방금 바뀐 버튼을 옛 모양으로 되돌렸는데(한 번 눌러서는 안
+ * 되는 것처럼 보였다), 누를 때마다 세대를 올려 그런 늦은 답은 버린다.
  */
 function ZonePanel({ password, activities, zones: initial, onClose }) {
   const [zones, setZones] = useState(initial)
   const [busy, setBusy] = useState("")
   const [error, setError] = useState("")
-  const [note, setNote] = useState("")
+  /**
+   * 방금 누른 결과 한 줄. 어느 체험존이 어떤 상태가 됐을 때의 말인지 함께 적어 두고,
+   * 그 뒤 다른 기기가 상태를 바꾸면 감춘다 — 버튼은 "마감"인데 밑에 "마감했습니다"가
+   * 남아 있으면 운영자는 둘 중 무엇을 믿어야 할지 모른다.
+   */
+  const [note, setNote] = useState(null)
+  /** 같은 순간 두 번 눌려도 한 번만 보낸다. 상태(busy)는 다음 그림에서야 바뀐다. */
+  const busyRef = useRef(false)
+  const genRef = useRef(0)
 
-  useEffect(() => {
-    let alive = true
-    const timer = setInterval(async () => {
-      try {
-        const data = await adminList(password)
-        if (alive) setZones(data.zones ?? {})
-      } catch {
-        // 잠깐 끊긴 것 — 다음 차례에 다시 묻는다.
-      }
-    }, ZONE_POLL_MS)
-    return () => {
-      alive = false
-      clearInterval(timer)
+  const reload = async () => {
+    const gen = genRef.current
+    try {
+      const data = await adminZones(password)
+      if (gen === genRef.current && !busyRef.current) setZones(data.zones ?? {})
+      return true
+    } catch {
+      return false // 잠깐 끊긴 것 — 곧 다시 묻는다(useLive)
     }
-  }, [password])
+  }
+  useLive(reload, { fastMs: 5000, slowMs: 15000 })
 
   const toggle = async (id, label) => {
-    if (busy) return
+    if (busyRef.current) return
     const zone = zones[id] ?? {}
     const closing = !zone.closed
     if (!window.confirm(zoneConfirmText(label, closing, zone.waiting ?? 0))) return
+    busyRef.current = true
+    genRef.current++
+    holdReload(15000) // 요청이 오가는 동안 화면이 새로 불러와지면 됐는지 모른다
     setBusy(id)
     setError("")
-    setNote("")
+    setNote(null)
+    let failed = false
     try {
       const data = await (closing ? adminClose : adminReopen)(password, id)
+      genRef.current++
       setZones(data.zones ?? {})
-      if (closing) setNote(`${label} 예약을 마감했습니다.`)
-      else if (data.reset === false) setNote(`${label}은(는) 이미 예약을 받는 중입니다.`)
-      else setNote(`${label} 마감을 해제했습니다. 대기번호가 1번부터 다시 시작합니다.`)
+      signalZonesChanged()
+      const closedNow = Boolean(data.zones?.[id]?.closed)
+      const text = closing
+        ? `${label} 예약을 마감했습니다.`
+        : data.reset === false
+          ? `${label}은(는) 이미 예약을 받는 중입니다.`
+          : `${label} 마감을 해제했습니다. 대기번호가 1번부터 다시 시작합니다.`
+      setNote({ id, closed: closedNow, text })
     } catch (e) {
+      failed = true
       setError(e.message)
     } finally {
+      busyRef.current = false
       setBusy("")
     }
+    // 실패했으면 서버에서는 됐는지 모른다 — 다시 물어 버튼을 실제 상태로 맞춘다.
+    if (failed) reload()
   }
 
   return (
@@ -240,9 +261,9 @@ function ZonePanel({ password, activities, zones: initial, onClose }) {
             )
           })}
         </ul>
-        {note ? (
+        {note && Boolean(zones[note.id]?.closed) === note.closed ? (
           <p className="lock__note" role="status">
-            {note}
+            {note.text}
           </p>
         ) : null}
         {error ? <p className="book__error" role="alert">{error}</p> : null}
