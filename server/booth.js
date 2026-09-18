@@ -14,11 +14,16 @@ import { sendMessage, notifyStatus, lastNotifyError } from "./notify.js"
  * 누르면 맨 앞이 빠지면서 뒤가 한 칸씩 당겨진다. 앞에 다섯 팀 이하로 남는 순간
  * 한 번만 "부스로 오세요" 안내가 나간다.
  *
- * **줄은 하루 단위다**(2026-09-16). 체험존마다 하루 100팀을 받고, 한국 시각 00시가
- * 지나면 대기번호가 1번부터 다시 시작하고 마감도 풀린다. 날짜가 바뀌는 순간에 무엇을
- * "지우는" 작업은 없다 — 모든 조회가 "오늘" 기록만 보도록 되어 있어서, 날이 바뀌면
- * 저절로 새 줄이 된다. 타이머에 기대지 않으므로 자정에 서버가 꺼져 있었어도 틀리지
- * 않고, 지난 기록은 파일에 그대로 남아 이름 검색으로 찾을 수 있다.
+ * **줄은 하루 단위다**(2026-09-16). 한국 시각 00시가 지나면 대기번호가 1번부터 다시
+ * 시작하고 마감도 풀린다. 날짜가 바뀌는 순간에 무엇을 "지우는" 작업은 없다 — 모든
+ * 조회가 "오늘" 기록만 보도록 되어 있어서, 날이 바뀌면 저절로 새 줄이 된다. 타이머에
+ * 기대지 않으므로 자정에 서버가 꺼져 있었어도 틀리지 않고, 지난 기록은 파일에 그대로
+ * 남아 이름 검색으로 찾을 수 있다.
+ *
+ * **마감은 운영자가 손으로만 한다**(2026-09-18). 정원이 차서 저절로 닫히는 일은 없다.
+ * 마감을 풀면 그 체험존의 줄이 **처음부터 다시 시작한다** — 대기 0팀, 다음 예약이 1번.
+ * 날이 바뀌는 것과 같은 방식이다: 해제할 때마다 그날 그 체험존의 "줄 순번"이 하나
+ * 올라가고, 모든 조회가 지금 순번의 기록만 본다.
  *
  * 저장은 JSON 파일 하나. 결제 쪽 코드와는 완전히 분리되어 있다.
  */
@@ -43,10 +48,7 @@ const CALL_AHEAD = 5
  */
 const CALL_DELAY_MS = 6000
 
-/** 체험존 하나가 하루에 받는 팀 수. */
-const DAILY_CAPACITY = Math.max(1, Math.floor(Number(process.env.BOOTH_DAILY_CAPACITY) || 100))
-
-/** 마감했거나 정원이 찬 체험존에 들어온 사람에게 보여 줄 말. */
+/** 마감한 체험존에 들어온 사람에게 보여 줄 말. */
 export const CLOSED_MESSAGE = "오늘은 마감되었어요. 내일 다시 만나요."
 
 export const ACTIVITIES = {
@@ -111,7 +113,13 @@ const dayOf = (r) => {
 
 /* ------------------------------------------------------------------ 저장소 */
 
-let state = { reservations: [], closed: {} }
+/**
+ * closed  { [날짜]: { [체험존]: 마감 시각 } }
+ * resets  { [날짜]: { [체험존]: [해제(=초기화) 시각, …] } } — 개수가 곧 지금 줄 순번
+ */
+let state = { reservations: [], closed: {}, resets: {} }
+
+const objectOr = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {})
 
 /**
  * 파일이 없으면 빈 줄로 시작한다. **파일이 깨져 있으면 절대 덮어쓰지 않는다** —
@@ -131,7 +139,8 @@ function load() {
     if (!Array.isArray(parsed?.reservations)) throw new Error("reservations 배열이 없다")
     state = {
       reservations: parsed.reservations,
-      closed: parsed.closed && typeof parsed.closed === "object" ? parsed.closed : {},
+      closed: objectOr(parsed.closed),
+      resets: objectOr(parsed.resets),
     }
   } catch (e) {
     const aside = `${DATA_FILE}.broken-${Date.now()}`
@@ -163,27 +172,47 @@ load()
 /** 같은 밀리초에 두 건이 들어와도 순서가 흔들리지 않게 대기번호로 한 번 더 가른다. */
 const byQueue = (a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || (a.teamNo || 0) - (b.teamNo || 0)
 
-const zoneOn = (activity, day) => state.reservations.filter((r) => r.activity === activity && dayOf(r) === day)
+/** 그날 그 체험존의 초기화 기록. */
+const resetsOn = (activity, day) => {
+  const list = state.resets?.[day]?.[activity]
+  return Array.isArray(list) ? list : []
+}
+/** 지금 줄의 순번. 마감 해제 때마다 하나씩 오른다. 한 번도 안 풀었으면 0. */
+const roundOn = (activity, day) => resetsOn(activity, day).length
+/** 예약이 선 줄의 순번. 이 기능 전의 기록에는 없으므로 0 — 그날 첫 줄이다. */
+const roundOfRes = (r) => Math.max(0, Math.floor(Number(r.round) || 0))
+const inCurrentRound = (r) => roundOfRes(r) === roundOn(r.activity, dayOf(r))
+
+/** 그날 그 체험존의 **지금 줄**. 초기화 전의 줄은 여기에 들어오지 않는다. */
+const zoneOn = (activity, day) => {
+  const round = roundOn(activity, day)
+  return state.reservations.filter((r) => r.activity === activity && dayOf(r) === day && roundOfRes(r) === round)
+}
 const waitingOn = (activity, day) => zoneOn(activity, day).filter((r) => r.status === "waiting").sort(byQueue)
 const doneOn = (activity, day) => zoneOn(activity, day).filter((r) => r.status === "done").length
-/** 정원을 차지하는 예약. 취소된 자리는 다른 팀에게 돌아간다. */
-const activeOn = (activity, day) =>
-  zoneOn(activity, day).filter((r) => r.status === "waiting" || r.status === "done").length
+/** 운영자가 마감을 눌렀는가. 방문자가 예약할 수 없는 유일한 경우다. */
 const closedOn = (activity, day) => Boolean(state.closed?.[day]?.[activity])
-const fullOn = (activity, day) => activeOn(activity, day) >= DAILY_CAPACITY
-/** 방문자에게는 둘이 같다 — 오늘은 더 받지 않는다. */
-const shutOn = (activity, day) => closedOn(activity, day) || fullOn(activity, day)
 
 /**
- * 오늘 이 체험존의 다음 대기번호.
+ * 지금 줄의 다음 대기번호.
  *
  * 건수 + 1 이 아니라 **가장 큰 번호 + 1** 이다. 예전 방식으로 매긴 번호가 섞여
- * 있어도 같은 날 같은 번호가 두 번 나오지 않는다. 취소된 번호도 다시 쓰지 않는다.
+ * 있어도 같은 줄에서 같은 번호가 두 번 나오지 않는다. 취소된 번호도 다시 쓰지 않는다.
+ * 초기화하면 지금 줄이 비므로 다시 1번이다.
  */
 const nextTeamNo = (activity, day) => zoneOn(activity, day).reduce((m, r) => Math.max(m, Number(r.teamNo) || 0), 0) + 1
 
-/** 날이 바뀌었는데 아직 대기로 남은 예약은 만료다. 어제 줄에 새 날의 순서를 매기지 않는다. */
-const statusOf = (r) => (r.status === "waiting" && dayOf(r) !== today() ? "expired" : r.status)
+/**
+ * 대기로 남아 있어도 지금 줄이 아니면 대기가 아니다.
+ *   expired  날이 바뀌었다. 어제 줄에 새 날의 순서를 매기지 않는다.
+ *   reset    마감 해제로 줄이 새로 시작됐다. (해제할 때 파일에도 적지만, 여기서 한 번 더 막는다.)
+ */
+const statusOf = (r) => {
+  if (r.status !== "waiting") return r.status
+  if (dayOf(r) !== today()) return "expired"
+  if (!inCurrentRound(r)) return "reset"
+  return "waiting"
+}
 
 const aheadOf = (r) => {
   if (statusOf(r) !== "waiting") return null
@@ -197,27 +226,24 @@ const counts = (day = today()) =>
 /** 방문자 화면이 쓰는 것 — 대기 수와 "오늘 더 받는지"만. */
 const publicZones = (day = today()) =>
   Object.fromEntries(
-    Object.keys(ACTIVITIES).map((id) => [id, { waiting: waitingOn(id, day).length, shut: shutOn(id, day) }])
+    Object.keys(ACTIVITIES).map((id) => [id, { waiting: waitingOn(id, day).length, shut: closedOn(id, day) }])
   )
 
-/** 운영 화면이 쓰는 것. */
+/** 운영 화면이 쓰는 것. 숫자는 모두 지금 줄 기준이다. */
 const adminZones = (day = today()) =>
   Object.fromEntries(
     Object.keys(ACTIVITIES).map((id) => {
-      const done = doneOn(id, day)
       const closed = closedOn(id, day)
+      const resets = resetsOn(id, day)
       return [
         id,
         {
           waiting: waitingOn(id, day).length,
-          done,
-          active: activeOn(id, day),
-          capacity: DAILY_CAPACITY,
-          full: fullOn(id, day),
+          done: doneOn(id, day),
           closed,
           closedAt: closed ? state.closed[day][id] : null,
-          // "100팀 이상 체험 완료부터" 마감할 수 있다.
-          canClose: !closed && done >= DAILY_CAPACITY,
+          round: resets.length,
+          resetAt: resets.at(-1) ?? null,
         },
       ]
     })
@@ -265,6 +291,10 @@ const adminView = (r) => ({
   notices: r.notices ?? [],
   callup: callupState(r),
   callupFailures: r.callupFailures ?? 0,
+  round: roundOfRes(r),
+  // 오늘의 지금 줄에 속하는가. 운영 화면의 체험존별 목록은 이것만 띄운다 —
+  // 초기화 전 줄까지 섞으면 1번이 둘 보인다. 지난 줄은 이름 검색으로 찾는다.
+  current: dayOf(r) === today() && inCurrentRound(r),
 })
 
 function record(r, kind, result) {
@@ -479,7 +509,7 @@ function validate(body) {
  * 학교 와이파이나 통신사 NAT 뒤에서는 **방문자 전부가 같은 IP 로 보인다**. 수업이
  * 끝나고 한 반이 한꺼번에 QR 을 찍으면 1분에 수십 건이 한 IP 에서 온다. 여기를
  * 조이면 진짜 손님이 먼저 막히므로 넉넉히 둔다(전에는 20 이라 그런 상황에서 막혔다).
- * 줄의 크기 자체는 하루 정원이 따로 막는다.
+ * 줄을 더 받지 않을 때는 운영자가 마감을 누른다.
  */
 const RATE_PER_MIN = Math.max(1, Math.floor(Number(process.env.BOOTH_RATE_PER_MIN) || 60))
 const hits = new Map()
@@ -515,7 +545,6 @@ router.get("/queue", (req, res) => {
   const mine = id ? state.reservations.find((r) => r.id === id) : null
   res.json({
     today: day,
-    capacity: DAILY_CAPACITY,
     callAhead: CALL_AHEAD,
     closedMessage: CLOSED_MESSAGE,
     counts: counts(day),
@@ -547,20 +576,17 @@ router.post("/reservations", async (req, res) => {
     })
   }
 
-  // 마감·정원 검사와 기록 사이에 await 가 없다. 노드는 한 번에 한 요청만 이
-  // 구간을 지나므로, 동시에 몰려도 101번째 팀이 끼어들 틈이 없다.
-  if (shutOn(value.activity, day)) {
-    return res.status(409).json({
-      error: "CLOSED",
-      message: CLOSED_MESSAGE,
-      reason: closedOn(value.activity, day) ? "closed" : "full",
-    })
+  // 마감 검사와 기록 사이에 await 가 없다. 노드는 한 번에 한 요청만 이 구간을
+  // 지나므로, 마감이 눌린 뒤에 들어온 예약이 끼어들 틈이 없다.
+  if (closedOn(value.activity, day)) {
+    return res.status(409).json({ error: "CLOSED", message: CLOSED_MESSAGE, reason: "closed" })
   }
 
   const reservation = {
     id: crypto.randomBytes(6).toString("hex"),
     ...value,
     day,
+    round: roundOn(value.activity, day),
     teamNo: nextTeamNo(value.activity, day),
     status: "waiting",
     createdAt: isoAt(t),
@@ -601,7 +627,6 @@ router.post("/admin/list", requireAdmin, (req, res) => {
   const rows = [...state.reservations].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
   res.json({
     today: day,
-    capacity: DAILY_CAPACITY,
     closedMessage: CLOSED_MESSAGE,
     counts: counts(day),
     zones: adminZones(day),
@@ -636,25 +661,17 @@ router.post("/admin/complete", requireAdmin, (req, res) => closeOne(req, res, "d
 router.post("/admin/cancel", requireAdmin, (req, res) => closeOne(req, res, "cancelled"))
 
 /**
- * 오늘 이 체험존 마감.
+ * 이 체험존 마감 — 새 예약을 받지 않는다.
  *
- * **체험 완료가 정원(100팀) 이상일 때만** 된다. 화면에서 버튼을 막아 두는 것과
- * 별개로 서버가 한 번 더 확인한다 — 화면만 믿으면 오래된 탭이나 직접 보낸 요청에
- * 뚫린다. 자정이 지나면 날짜가 바뀌어 마감도 저절로 풀린다.
+ * 이미 줄에 선 팀은 그대로다. 순서를 계속 보고, 호출 문자도 그대로 받고, 운영자는
+ * 체험 완료를 계속 누른다. 막는 것은 새로 들어오는 예약뿐이다.
+ * 자정이 지나면 날짜가 바뀌어 마감도 저절로 풀린다.
  */
 router.post("/admin/close", requireAdmin, (req, res) => {
   const activity = activityOf(req.body)
   if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
 
   const day = today()
-  const done = doneOn(activity, day)
-  if (done < DAILY_CAPACITY) {
-    return res.status(409).json({
-      error: "NOT_YET",
-      message: `체험 완료가 ${done}/${DAILY_CAPACITY}팀이라 아직 마감할 수 없습니다.`,
-    })
-  }
-
   if (!closedOn(activity, day)) {
     state.closed[day] = { ...(state.closed[day] ?? {}), [activity]: isoAt(nowMs()) }
     save()
@@ -662,19 +679,36 @@ router.post("/admin/close", requireAdmin, (req, res) => {
   res.json({ ok: true, zones: adminZones(day) })
 })
 
-/** 잘못 누른 마감을 되돌리는 자리. 되돌릴 수 없는 버튼은 현장에서 사고가 된다. */
+/**
+ * 마감 해제 — 이 체험존의 줄을 **처음부터 다시 시작한다.**
+ *
+ * 대기 0팀, 다음 예약이 1번. 아직 대기로 남아 있던 팀은 줄에서 빠진다(상태 `reset`).
+ * 번호를 1번부터 다시 주면서 옛 대기를 남겨 두면 같은 번호가 둘이 되기 때문이다.
+ * 기록은 지우지 않는다 — 이름 검색으로 "초기화"라고 찾힌다.
+ *
+ * **마감된 체험존에만** 한다. 해제 버튼이 두 번 눌리거나 오래된 화면에서 요청이
+ * 늦게 오면, 그 사이 새로 선 줄을 또 지워 버린다. 그래서 마감 상태가 아니면 아무것도
+ * 하지 않는다 — 한 번의 마감에 초기화는 한 번뿐이다.
+ */
 router.post("/admin/reopen", requireAdmin, (req, res) => {
   const activity = activityOf(req.body)
   if (!activity) return res.status(400).json({ error: "UNKNOWN_ACTIVITY", message: "활동을 찾을 수 없습니다." })
 
   const day = today()
-  if (state.closed[day]?.[activity]) {
-    const rest = { ...state.closed[day] }
-    delete rest[activity]
-    state.closed[day] = rest
-    save()
+  if (!closedOn(activity, day)) return res.json({ ok: true, reset: false, dropped: 0, zones: adminZones(day) })
+
+  const at = isoAt(nowMs())
+  const left = waitingOn(activity, day)
+  for (const r of left) {
+    r.status = "reset"
+    r.doneAt = at
   }
-  res.json({ ok: true, zones: adminZones(day) })
+  const rest = { ...state.closed[day] }
+  delete rest[activity]
+  state.closed[day] = rest
+  state.resets[day] = { ...(state.resets[day] ?? {}), [activity]: [...resetsOn(activity, day), at] }
+  save()
+  res.json({ ok: true, reset: true, dropped: left.length, zones: adminZones(day) })
 })
 
 /** 행사 전에 문자가 실제로 나가는지 확인하는 자리. */

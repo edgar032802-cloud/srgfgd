@@ -8,6 +8,7 @@ import {
   adminReopen,
   adminTest,
   formatPhone,
+  zoneConfirmText,
 } from "../lib/booth.js"
 import { readPassword, savePassword } from "../lib/adminSession.js"
 import "../components/booth.css"
@@ -71,11 +72,13 @@ export default function BoothAdmin() {
     }
   }
 
-  /** 마감·해제. 마감은 오늘 그 체험존의 새 예약을 모두 막으므로 한 번 더 묻는다. */
+  /**
+   * 마감·해제. 마감은 새 예약을 모두 막고, 해제는 그 체험존의 줄을 처음부터 다시
+   * 시작하므로(대기 0, 다음 예약 1번) 둘 다 한 번 더 묻는다.
+   */
   const toggleZone = async (id, label, closing) => {
-    if (closing && !window.confirm(`${label} 을(를) 오늘 마감할까요?\n방문자 화면에 "오늘은 마감되었어요"가 뜨고 새 예약을 받지 않습니다.`)) {
-      return
-    }
+    const waitingNow = data?.zones?.[id]?.waiting ?? 0
+    if (!window.confirm(zoneConfirmText(label, closing, waitingNow))) return
     setBusy(`zone:${id}`)
     try {
       await (closing ? adminClose : adminReopen)(password, id)
@@ -91,8 +94,8 @@ export default function BoothAdmin() {
   const rows = data?.reservations ?? []
   const zones = data?.zones ?? {}
   const today = data?.today ?? ""
-  // 줄과 버튼은 **오늘** 것만. 지난날 기록은 이름 검색에서만 찾는다.
-  const todayRows = rows.filter((r) => r.day === today)
+  // 줄과 버튼은 **오늘의 지금 줄** 것만. 지난날 기록과 초기화 전 줄은 이름 검색에서 찾는다.
+  const todayRows = rows.filter((r) => r.current)
 
   return (
     <div className="admin">
@@ -105,7 +108,11 @@ export default function BoothAdmin() {
 
       {error ? <p className="book__error" role="alert">{error}</p> : null}
 
-      {today ? <p className="admin__today">{today} · 체험존마다 하루 {data.capacity}팀 · 한국 시각 00시에 초기화</p> : null}
+      {today ? (
+        <p className="admin__today">
+          {today} · 한국 시각 00시에 초기화 · 마감 해제하면 그 체험존 대기번호가 처음부터 다시 시작
+        </p>
+      ) : null}
 
       <ul className="admin__counts">
         {Object.entries(activities).map(([id, a]) => {
@@ -115,8 +122,8 @@ export default function BoothAdmin() {
               <span>{a.label}</span>
               <strong>대기 {z.waiting ?? 0}팀</strong>
               <em>
-                완료 {z.done ?? 0} / {z.capacity ?? "-"}
-                {z.closed ? " · 마감" : z.full ? " · 정원 참" : ""}
+                완료 {z.done ?? 0}
+                {z.closed ? " · 마감" : ""}
               </em>
             </li>
           )
@@ -214,38 +221,34 @@ function CallupNote({ state }) {
 }
 
 /**
- * 체험존 하나의 오늘 상태와 마감 버튼.
- *
- * 마감은 **체험 완료가 정원 이상일 때만** 누를 수 있다. 그 전에는 버튼을 막아 두고
- * 몇 팀 남았는지 적는다. 막는 것은 서버도 한 번 더 한다(화면만 믿지 않는다).
+ * 체험존 하나의 상태와 마감 버튼. 마감은 언제든 누를 수 있고(정원으로 저절로
+ * 닫히는 일은 없다), 마감된 체험존은 버튼이 "마감해제"로 바뀐다. 해제하면 그
+ * 체험존의 줄이 처음부터 다시 시작한다.
  */
 function ZoneBar({ zone, busy, onClose, onReopen }) {
   const done = zone.done ?? 0
-  const cap = zone.capacity ?? 0
+  const since = zone.resetAt ? ` · ${timeOf(zone.resetAt)} 초기화 이후` : ""
 
   if (zone.closed) {
     return (
       <div className="zone zone--closed">
         <span>
-          <b>오늘 마감됨</b>
+          <b>마감됨</b>
           {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""} · 방문자에게 "오늘은 마감되었어요"가 보입니다
         </span>
-        <button className="admin__ghost" type="button" disabled={busy} onClick={onReopen}>
-          마감 해제
+        <button className="zone__open" type="button" disabled={busy} onClick={onReopen}>
+          마감해제
         </button>
       </div>
     )
   }
 
   return (
-    <div className={`zone ${zone.canClose ? "zone--ready" : ""}`}>
+    <div className="zone">
       <span>
-        {zone.canClose
-          ? `체험 완료 ${done}팀 — 마감할 수 있습니다`
-          : `체험 완료 ${done} / ${cap}팀 · ${Math.max(0, cap - done)}팀 더 완료하면 마감할 수 있어요`}
-        {zone.full && !zone.canClose ? " · 정원이 차서 새 예약은 받지 않는 중" : ""}
+        <b>예약 받는 중</b> · 체험 완료 {done}팀{since}
       </span>
-      <button className="zone__close" type="button" disabled={!zone.canClose || busy} onClick={onClose}>
+      <button className="zone__close" type="button" disabled={busy} onClick={onClose}>
         마감
       </button>
     </div>
@@ -340,6 +343,8 @@ function StateTag({ row }) {
   if (row.status === "cancelled") return <span className="tag tag--off">취소</span>
   // 날이 바뀔 때까지 차례가 오지 않은 예약. 오늘 줄에는 없다.
   if (row.status === "expired") return <span className="tag tag--off">만료</span>
+  // 마감 해제로 줄이 새로 시작될 때 대기 중이던 예약.
+  if (row.status === "reset") return <span className="tag tag--off">초기화</span>
   if (typeof row.ahead !== "number") return <span className="tag">대기</span>
   if (row.callup === "failed") return <span className="tag tag--fail">호출 실패 · 앞 {row.ahead}팀</span>
   if (row.ahead === 0) return <span className="tag tag--now">진행 중</span>

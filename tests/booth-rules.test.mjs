@@ -1,5 +1,5 @@
 /**
- * 체험 예약 — 하루 정원 · 마감 · 자정 초기화 · 호출 규칙 전수 검증.
+ * 체험 예약 — 수동 마감 · 마감해제(줄 초기화) · 자정 초기화 · 호출 규칙 전수 검증.
  *
  * 실제 서버(server/index.js)를 따로따로 띄워 HTTP 로만 찌른다. 문자는 키를 비워
  * 절대 나가지 않게 하고, 예약 파일은 임시 폴더에 둬서 진짜 명단을 건드리지 않는다.
@@ -82,7 +82,7 @@ const notices = async (srv, id) => {
 
 try {
   /* ================================================================ A·B */
-  console.log("\n━━ A. 하루 정원 100팀 (정원 값을 줄이지 않고 실제 100 으로)")
+  console.log("\n━━ A. 정원 없음 — 100팀이 넘어도 저절로 닫히지 않는다")
   const S = await startServer(8961, { BOOTH_RATE_PER_MIN: "100000" })
 
   const first = await book(S, "register", 1)
@@ -90,87 +90,135 @@ try {
 
   const nos = [first.d.reservation.teamNo]
   let firstFail = null
-  for (let i = 2; i <= 100; i++) {
+  for (let i = 2; i <= 150; i++) {
     const r = await book(S, "register", i)
     if (r.s !== 200) firstFail ??= `${i}번째 ${r.s} ${r.d.error}`
     else nos.push(r.d.reservation.teamNo)
   }
-  ok("1~100번째 예약 모두 성공", firstFail === null, firstFail ?? "")
-  ok("대기번호가 1..100 으로 빠짐없이 한 번씩", nos.length === 100 && nos.every((n, i) => n === i + 1))
-
-  const over = await book(S, "register", 101)
-  ok("101번째는 막힌다 (409 CLOSED)", over.s === 409 && over.d.error === "CLOSED", `${over.s} ${over.d.error}`)
-  ok("막힌 이유는 정원(full)", over.d.reason === "full", over.d.reason)
-  ok("막힐 때 문구가 정확하다", over.d.message === "오늘은 마감되었어요. 내일 다시 만나요.", over.d.message)
+  ok("1~150번째 예약 모두 성공 (100에서 막히지 않음)", firstFail === null, firstFail ?? "")
+  ok("대기번호가 1..150 으로 빠짐없이 한 번씩", nos.length === 150 && nos.every((n, i) => n === i + 1))
 
   const q1 = await S.get("/queue")
-  ok("방문자 화면에 shut=true 로 전달", q1.d.zones?.register?.shut === true)
-  ok("방문자 화면 대기 수 100", q1.d.counts?.register === 100, String(q1.d.counts?.register))
-  ok("다른 체험존은 영향 없음(shut=false)", q1.d.zones?.seek?.shut === false)
+  ok("150팀이어도 방문자 화면 shut=false", q1.d.zones?.register?.shut === false)
+  ok("방문자 화면 대기 수 150", q1.d.counts?.register === 150, String(q1.d.counts?.register))
+  ok("응답에 정원 값이 더는 없다", !("capacity" in q1.d))
+  const zA = (await admin(S)).d.zones.register
+  ok("운영 화면에도 정원·자동 마감 표시 없음", !("capacity" in zA) && !("full" in zA) && !("canClose" in zA), Object.keys(zA).join(","))
 
-  const other = await book(S, "seek", 500)
-  ok("다른 체험존은 그대로 예약된다(1번)", other.s === 200 && other.d.reservation.teamNo === 1)
+  console.log("\n━━ A2. 취소해도 번호는 재사용하지 않는다")
+  const victim = (await admin(S)).d.reservations.find((r) => r.activity === "register" && r.teamNo === 50)
+  ok("50번 취소", (await S.post("/admin/cancel", { password: PW, id: victim.id })).s === 200)
+  const refill = await book(S, "register", 151)
+  ok("새 번호는 151 (50을 재사용하지 않음)", refill.d.reservation?.teamNo === 151, String(refill.d.reservation?.teamNo))
 
-  console.log("\n━━ A2. 취소하면 자리가 돌아온다 · 번호는 재사용하지 않는다")
-  const listA = await admin(S)
-  const victim = listA.d.reservations.find((r) => r.activity === "register" && r.teamNo === 50)
-  const c1 = await S.post("/admin/cancel", { password: PW, id: victim.id })
-  ok("50번 취소", c1.s === 200)
-  const refill = await book(S, "register", 102)
-  ok("취소로 빈 자리에 새 예약이 들어간다", refill.s === 200, `${refill.s} ${refill.d.error ?? ""}`)
-  ok("새 번호는 101 (50을 재사용하지 않음)", refill.d.reservation?.teamNo === 101, String(refill.d.reservation?.teamNo))
-  const again = await book(S, "register", 103)
-  ok("다시 정원이 차서 막힌다", again.s === 409 && again.d.reason === "full")
-
-  console.log("\n━━ B. 마감 버튼 — 체험 완료 100팀부터")
+  console.log("\n━━ B. 마감 — 완료 수와 상관없이 언제든")
   let z = (await admin(S)).d.zones.register
-  ok("완료 0 → 마감 불가(canClose=false)", z.canClose === false && z.done === 0)
-  const early = await S.post("/admin/close", { password: PW, activity: "register" })
-  ok("완료 0 에서 마감 요청은 서버가 거절(409 NOT_YET)", early.s === 409 && early.d.error === "NOT_YET", early.d.message)
-
-  // 99팀 완료
-  let list = (await admin(S)).d.reservations.filter((r) => r.activity === "register" && r.status === "waiting")
-  list.sort((a, b) => a.ahead - b.ahead)
-  for (const r of list.slice(0, 99)) await S.post("/admin/complete", { password: PW, id: r.id })
-  z = (await admin(S)).d.zones.register
-  ok("완료 99 → 아직 마감 불가", z.done === 99 && z.canClose === false, `done=${z.done}`)
-  const at99 = await S.post("/admin/close", { password: PW, activity: "register" })
-  ok("완료 99 에서 마감 요청 거절", at99.s === 409, at99.d.message)
-
-  // 100팀째 완료
-  list = (await admin(S)).d.reservations.filter((r) => r.activity === "register" && r.status === "waiting")
-  await S.post("/admin/complete", { password: PW, id: list[0].id })
-  z = (await admin(S)).d.zones.register
-  ok("완료 100 → 마감 가능(canClose=true)", z.done === 100 && z.canClose === true, `done=${z.done}`)
-  ok("정원 100 이 전부 완료되면 대기 0", z.waiting === 0, `waiting=${z.waiting}`)
-
+  ok("완료 0 인 상태", z.done === 0 && z.closed === false)
   const closeR = await S.post("/admin/close", { password: PW, activity: "register" })
-  ok("마감 성공", closeR.s === 200 && closeR.d.zones.register.closed === true)
-  ok("마감 후 canClose=false (중복 마감 버튼 안 뜸)", closeR.d.zones.register.canClose === false)
+  ok("완료 0 에서도 마감 성공", closeR.s === 200 && closeR.d.zones.register.closed === true, `${closeR.s} ${closeR.d.message ?? ""}`)
   const twice = await S.post("/admin/close", { password: PW, activity: "register" })
   ok("마감을 두 번 눌러도 문제없음", twice.s === 200 && twice.d.zones.register.closed === true)
+  ok("마감 시각이 남는다", typeof twice.d.zones.register.closedAt === "string")
 
-  const afterClose = await book(S, "register", 104)
-  ok("마감 후 예약은 막힌다", afterClose.s === 409 && afterClose.d.error === "CLOSED")
-  ok("마감 후 막힌 이유는 closed", afterClose.d.reason === "closed", afterClose.d.reason)
-  ok("마감 후 문구 정확", afterClose.d.message === "오늘은 마감되었어요. 내일 다시 만나요.")
+  const afterClose = await book(S, "register", 152)
+  ok("마감 후 예약은 막힌다 (409 CLOSED)", afterClose.s === 409 && afterClose.d.error === "CLOSED")
+  ok("막힌 이유는 closed", afterClose.d.reason === "closed", afterClose.d.reason)
+  ok("막힐 때 문구가 정확하다", afterClose.d.message === "오늘은 마감되었어요. 내일 다시 만나요.", afterClose.d.message)
   const q2 = await S.get("/queue")
   ok("마감 후 방문자 화면 shut=true", q2.d.zones.register.shut === true)
-  ok("마감은 다른 체험존에 번지지 않는다", q2.d.zones.seek.shut === false)
+  ok("마감 후 문구도 함께 내려간다", q2.d.closedMessage === "오늘은 마감되었어요. 내일 다시 만나요.")
+  ok("마감은 다른 체험존에 번지지 않는다", q2.d.zones.seek.shut === false && q2.d.zones.sensitive.shut === false && q2.d.zones.avoid.shut === false)
+  ok("다른 체험존은 그대로 예약된다(1번)", (await book(S, "seek", 500)).d.reservation?.teamNo === 1)
+  ok("마감해도 이미 선 줄은 그대로(대기 150)", q2.d.counts.register === 150, String(q2.d.counts.register))
 
+  const alreadyIn = await book(S, "register", 10) // 줄에 서 있는 사람이 다시 누르면
+  ok("마감 뒤에도 줄에 선 사람은 자기 순서를 받는다(ALREADY_BOOKED)", alreadyIn.s === 409 && alreadyIn.d.error === "ALREADY_BOOKED")
+
+  console.log("   … 접수 뒤 호출 대기 시간(6초)")
+  await sleep(7000)
+  const regWaiting = () =>
+    admin(S).then(({ d }) => d.reservations.filter((r) => r.activity === "register" && r.status === "waiting").sort((a, b) => a.ahead - b.ahead))
+  let rw = await regWaiting()
+  for (const r of rw.slice(0, 3)) await S.post("/admin/complete", { password: PW, id: r.id })
+  await sleep(500)
+  rw = await regWaiting()
+  ok("마감 중에도 체험 완료가 된다(대기 147)", rw.length === 147, String(rw.length))
+  ok("마감 중에도 앞 5팀이 된 팀에게 호출이 간다", rw[5].calledAt && (await notices(S, rw[5].id)).includes("callup"), `${rw[5].teamNo}번`)
+  const farOld = rw[10] // 앞 10팀 — 아직 호출되지 않은 팀
+  ok("앞 10팀은 아직 호출 없음", JSON.stringify(await notices(S, farOld.id)) === '["booked"]')
+
+  console.log("\n━━ B2. 마감해제 — 그 체험존의 줄이 처음부터 다시")
   const reopen = await S.post("/admin/reopen", { password: PW, activity: "register" })
-  ok("마감 해제", reopen.s === 200 && reopen.d.zones.register.closed === false)
+  ok("마감 해제 성공", reopen.s === 200 && reopen.d.zones.register.closed === false)
+  ok("해제가 초기화로 처리됨(reset=true)", reopen.d.reset === true)
+  ok("남아 있던 대기 147팀이 줄에서 빠짐", reopen.d.dropped === 147, String(reopen.d.dropped))
+  ok("해제 직후 대기 0", reopen.d.zones.register.waiting === 0)
+  ok("해제 직후 완료 수도 0 (새 줄 기준)", reopen.d.zones.register.done === 0)
+  ok("줄 순번 1", reopen.d.zones.register.round === 1)
   const q3 = await S.get("/queue")
-  ok("해제해도 정원이 찼으면 여전히 shut (완료 100 = 정원)", q3.d.zones.register.shut === true)
+  ok("해제 후 방문자 화면 shut=false", q3.d.zones.register.shut === false)
+  ok("해제 후 방문자 화면 대기 0", q3.d.counts.register === 0)
+
+  const fresh1 = await book(S, "register", 9001)
+  ok("해제 후 첫 예약은 1번", fresh1.s === 200 && fresh1.d.reservation.teamNo === 1, `${fresh1.s} ${fresh1.d.reservation?.teamNo}`)
+  ok("해제 후 첫 예약은 앞 0팀", fresh1.d.reservation.ahead === 0)
+  ok("해제 후 첫 예약은 대기 1팀으로 보인다", fresh1.d.reservation.waiting === 1)
+
+  const oldMine = (await S.get(`/queue?id=${farOld.id}`)).d.mine
+  ok("빠진 예약의 상태는 'reset'", oldMine.status === "reset", oldMine.status)
+  ok("빠진 예약의 순서는 없음(null)", oldMine.ahead === null)
+  const rebook = await book(S, "register", Number(farOld.phone.slice(-8)) - 10000000)
+  ok("빠진 사람도 다시 예약할 수 있다(중복 아님) → 2번", rebook.s === 200 && rebook.d.reservation.teamNo === 2, `${rebook.s} ${rebook.d.error ?? rebook.d.reservation?.teamNo}`)
+  ok("빠진 예약은 체험 완료 불가(409)", (await S.post("/admin/complete", { password: PW, id: farOld.id })).s === 409)
+  ok("빠진 예약은 취소도 불가(409)", (await S.post("/admin/cancel", { password: PW, id: farOld.id })).s === 409)
+
+  const listB2 = (await admin(S)).d.reservations.filter((r) => r.activity === "register")
+  ok("기록은 지워지지 않는다(151 + 새 2)", listB2.length === 153, String(listB2.length))
+  ok("빠진 147팀은 상태 'reset'", listB2.filter((r) => r.status === "reset").length === 147)
+  ok("완료 3·취소 1 은 그대로", listB2.filter((r) => r.status === "done").length === 3 && listB2.filter((r) => r.status === "cancelled").length === 1)
+  ok("지금 줄(current)은 새 2팀뿐", listB2.filter((r) => r.current).map((r) => r.teamNo).sort().join() === "1,2")
+  const onDisk = JSON.parse(fs.readFileSync(path.join(S.dataDir, "booth.json"), "utf8"))
+  ok("파일에도 'reset' 으로 적힌다", onDisk.reservations.filter((r) => r.status === "reset").length === 147)
+  const dayB = (await S.get("/queue")).d.today
+  ok("파일에 초기화 시각이 남는다", onDisk.resets?.[dayB]?.register?.length === 1)
+
+  const again = await S.post("/admin/reopen", { password: PW, activity: "register" })
+  ok("해제를 두 번 눌러도 두 번째는 아무것도 안 함(reset=false)", again.s === 200 && again.d.reset === false && again.d.dropped === 0)
+  ok("두 번째 해제 뒤에도 새 줄 2팀 그대로", again.d.zones.register.waiting === 2, String(again.d.zones.register.waiting))
+  ok("두 번째 해제 뒤 다음 번호는 3", (await book(S, "register", 9003)).d.reservation?.teamNo === 3)
+
+  const neverClosed = await S.post("/admin/reopen", { password: PW, activity: "seek" })
+  ok("마감 안 된 체험존에 해제 요청 → 아무것도 안 함", neverClosed.d.reset === false && neverClosed.d.zones.seek.waiting === 1)
+
+  console.log("   … 빠진 팀에게 호출이 가지 않는지 정기 점검(10초)까지 기다린다")
+  await sleep(11000)
+  ok("빠진 팀(앞 10팀이던)은 호출 문자 없음", JSON.stringify(await notices(S, farOld.id)) === '["booked"]', JSON.stringify(await notices(S, farOld.id)))
+  const resetAt = Date.parse(reopen.d.zones.register.resetAt)
+  const resetCalled = (await admin(S)).d.reservations.filter(
+    (r) => r.status === "reset" && r.notices.some((n) => n.kind === "callup" && Date.parse(n.at) > resetAt)
+  )
+  ok("빠진 팀 누구에게도 새 호출이 가지 않았다", resetCalled.length === 0, `${resetCalled.length}건`)
+  ok("새 줄 1번은 접수 + 호출", JSON.stringify(await notices(S, fresh1.d.reservation.id)) === '["booked","callup"]', JSON.stringify(await notices(S, fresh1.d.reservation.id)))
+
+  console.log("\n━━ B3. 마감 → 해제를 한 번 더")
+  await S.post("/admin/close", { password: PW, activity: "register" })
+  ok("다시 마감되면 예약 막힘", (await book(S, "register", 9100)).s === 409)
+  const reopen2 = await S.post("/admin/reopen", { password: PW, activity: "register" })
+  ok("두 번째 초기화 — 새 줄 3팀이 빠짐", reopen2.d.reset === true && reopen2.d.dropped === 3, String(reopen2.d.dropped))
+  ok("줄 순번 2", reopen2.d.zones.register.round === 2)
+  ok("다시 1번부터", (await book(S, "register", 9101)).d.reservation?.teamNo === 1)
 
   const badAct = await S.post("/admin/close", { password: PW, activity: "toString" })
   ok("이상한 활동 이름으로 마감 요청 거절", badAct.s === 400)
+  ok("이상한 활동 이름으로 해제 요청 거절", (await S.post("/admin/reopen", { password: PW, activity: "__proto__" })).s === 400)
   const badBook = await S.post("/reservations", { activity: "__proto__", name: "해커", phone: phone(9), dept: "x" })
   ok("이상한 활동 이름으로 예약 거절", badBook.s === 400)
-  const noPw = await S.post("/admin/close", { password: "0000", activity: "seek" })
-  ok("비밀번호 틀리면 마감 불가", noPw.s === 401)
-  const doneAgain = await S.post("/admin/complete", { password: PW, id: list[0].id })
-  ok("이미 완료한 팀을 다시 완료할 수 없다", doneAgain.s === 409)
+  ok("비밀번호 틀리면 마감 불가", (await S.post("/admin/close", { password: "0000", activity: "seek" })).s === 401)
+  ok("비밀번호 틀리면 해제 불가", (await S.post("/admin/reopen", { password: "0000", activity: "register" })).s === 401)
+  ok("비밀번호 틀린 요청은 아무것도 바꾸지 않았다", (await S.get("/queue")).d.zones.seek.shut === false)
+
+  const doneOne = (await admin(S)).d.reservations.find((r) => r.activity === "register" && r.status === "done")
+  ok("이미 완료한 팀을 다시 완료할 수 없다", (await S.post("/admin/complete", { password: PW, id: doneOne.id })).s === 409)
 
   /* ================================================================ D */
   console.log("\n━━ D. 앞에 5팀 이상일 때 새 예약 — 기존 규칙과 일치하는가")
@@ -237,23 +285,30 @@ try {
   const shouldBeCalled = seekAll.filter((r) => r.status === "waiting" && r.ahead <= 5)
   ok("앞 5팀 이내 대기자는 전원 호출 기록 있음", shouldBeCalled.every((r) => r.calledAt), `${shouldBeCalled.filter((r) => !r.calledAt).length}명 누락`)
 
-  console.log("\n━━ G. 재시작해도 정원·마감·번호가 유지되는가")
+  console.log("\n━━ G. 재시작해도 마감·초기화·번호가 유지되는가")
   await S.post("/admin/close", { password: PW, activity: "register" })
-  const seekMaxBefore = Math.max(...(await admin(S)).d.reservations.filter((r) => r.activity === "seek").map((r) => r.teamNo))
+  const beforeRestart = (await admin(S)).d
+  const seekMaxBefore = Math.max(...beforeRestart.reservations.filter((r) => r.activity === "seek").map((r) => r.teamNo))
+  const resetCountBefore = beforeRestart.reservations.filter((r) => r.status === "reset").length
   const dataDir = S.dataDir
   await S.stop()
   const S2 = await startServer(8965, { BOOTH_DATA_DIR: dataDir, BOOTH_RATE_PER_MIN: "100000" })
-  const z2 = (await admin(S2)).d.zones.register
+  const after2 = (await admin(S2)).d
+  const z2 = after2.zones.register
   ok("재시작 후 마감 유지", z2.closed === true)
-  ok("재시작 후 완료 100 유지", z2.done === 100)
-  const r2 = await book(S2, "register", 2000)
-  ok("재시작 후에도 예약 막힘", r2.s === 409)
+  ok("재시작 후 줄 순번 유지(2)", z2.round === 2, String(z2.round))
+  ok("재시작 후 지금 줄 대기 1팀 유지", z2.waiting === 1, String(z2.waiting))
+  ok("재시작 후 'reset' 기록 유지", after2.reservations.filter((r) => r.status === "reset").length === resetCountBefore)
+  ok("재시작 후에도 예약 막힘", (await book(S2, "register", 2000)).s === 409)
   const seekNext = await book(S2, "seek", 2001)
   ok(
     `재시작 후 번호가 이어진다(재시작 전 최대 ${seekMaxBefore} → ${seekMaxBefore + 1})`,
     seekNext.d.reservation?.teamNo === seekMaxBefore + 1,
     String(seekNext.d.reservation?.teamNo)
   )
+  const reopen3 = await S2.post("/admin/reopen", { password: PW, activity: "register" })
+  ok("재시작 후 해제도 초기화로 동작(대기 1팀 빠짐, 순번 3)", reopen3.d.reset === true && reopen3.d.dropped === 1 && reopen3.d.zones.register.round === 3)
+  ok("재시작 후 해제 → 다시 1번", (await book(S2, "register", 2002)).d.reservation?.teamNo === 1)
   await S2.stop()
 
   /* ================================================================ C */
@@ -261,7 +316,7 @@ try {
   const now = Date.now()
   const nextMidnightUtc = Math.ceil((now + KST + 1) / DAY_MS) * DAY_MS - KST
   const offset = nextMidnightUtc - 20_000 - now
-  const M = await startServer(8962, { BOOTH_CLOCK_OFFSET_MS: String(offset), BOOTH_DAILY_CAPACITY: "3", BOOTH_RATE_PER_MIN: "100000" })
+  const M = await startServer(8962, { BOOTH_CLOCK_OFFSET_MS: String(offset), BOOTH_RATE_PER_MIN: "100000" })
 
   const before = await M.get("/queue")
   const dayBefore = before.d.today
@@ -271,12 +326,16 @@ try {
   const m2 = await book(M, "register", 2)
   const m3 = await book(M, "register", 3)
   ok("자정 전: 1·2·3번", [m1, m2, m3].map((x) => x.d.reservation?.teamNo).join() === "1,2,3")
-  ok("자정 전: 정원 3 → 4번째 막힘", (await book(M, "register", 4)).s === 409)
   const lm = (await admin(M)).d.reservations.filter((r) => r.activity === "register")
   for (const r of lm) await M.post("/admin/complete", { password: PW, id: r.id })
-  ok("자정 전: 완료 3 → 마감", (await M.post("/admin/close", { password: PW, activity: "register" })).s === 200)
+  ok("자정 전: 감각등록 마감", (await M.post("/admin/close", { password: PW, activity: "register" })).s === 200)
+  // 감각추구는 자정 전에 마감 → 해제(초기화)를 한 번 해 둔다. 순번 1 인 줄에 남은 예약이 자정을 넘긴다.
+  await book(M, "seek", 20)
+  await M.post("/admin/close", { password: PW, activity: "seek" })
+  const seekReset = await M.post("/admin/reopen", { password: PW, activity: "seek" })
+  ok("자정 전: 감각추구 초기화(순번 1)", seekReset.d.reset === true && seekReset.d.zones.seek.round === 1)
   const leftover = await book(M, "seek", 10) // 자정 넘어서도 대기로 남을 예약
-  ok("자정 전: 감각추구 대기 1명", leftover.d.reservation?.ahead === 0)
+  ok("자정 전: 초기화 뒤 감각추구 1번 · 앞 0팀", leftover.d.reservation?.teamNo === 1 && leftover.d.reservation?.ahead === 0)
   ok("자정 전: 감각등록 마감 상태", (await M.get("/queue")).d.zones.register.shut === true)
 
   // 실제로 자정이 지나기를 기다린다
@@ -291,8 +350,9 @@ try {
   const qa = await M.get("/queue")
   ok("자정 후: 감각등록 마감 풀림(shut=false)", qa.d.zones.register.shut === false)
   ok("자정 후: 대기 수 전부 0", Object.values(qa.d.counts).every((n) => n === 0), JSON.stringify(qa.d.counts))
-  const za = (await admin(M)).d.zones.register
-  ok("자정 후: 완료 0, 마감 아님", za.done === 0 && za.closed === false)
+  const zAll = (await admin(M)).d.zones
+  ok("자정 후: 완료 0, 마감 아님", zAll.register.done === 0 && zAll.register.closed === false)
+  ok("자정 후: 줄 순번도 0 으로(어제 초기화는 어제 것)", zAll.seek.round === 0 && zAll.register.round === 0)
 
   const n1 = await book(M, "register", 1) // 어제와 같은 번호로도 오늘은 새로 예약 가능
   ok("자정 후: 대기번호 1번부터 다시", n1.s === 200 && n1.d.reservation.teamNo === 1, `${n1.s} ${n1.d.reservation?.teamNo}`)
@@ -309,8 +369,9 @@ try {
   ok("만료 예약은 완료 처리 불가(409)", doneOld.s === 409)
 
   const all = (await admin(M)).d.reservations
-  ok("어제 기록은 지워지지 않고 남아 있음(검색용)", all.filter((r) => r.day === dayBefore).length === 4, `${all.filter((r) => r.day === dayBefore).length}건`)
+  ok("어제 기록은 지워지지 않고 남아 있음(검색용)", all.filter((r) => r.day === dayBefore).length === 5, `${all.filter((r) => r.day === dayBefore).length}건`)
   ok("어제 완료 기록은 '완료'로 남음", all.filter((r) => r.day === dayBefore && r.status === "done").length === 3)
+  ok("어제 초기화로 빠진 기록은 '초기화'로 남음", all.filter((r) => r.day === dayBefore && r.status === "reset").length === 1)
   await M.stop()
 
   /* ================================================================ F */

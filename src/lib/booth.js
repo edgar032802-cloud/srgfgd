@@ -30,9 +30,29 @@ export const adminList = (password) => post("/api/booth/admin/list", { password 
 export const adminComplete = (password, id) => post("/api/booth/admin/complete", { password, id })
 export const adminCancel = (password, id) => post("/api/booth/admin/cancel", { password, id })
 export const adminTest = (password, phone) => post("/api/booth/admin/test", { password, phone })
-/** 오늘 이 체험존 마감. 서버가 체험 완료 정원 이상인지 다시 확인한다. */
+/** 이 체험존 마감 — 새 예약을 받지 않는다. 이미 선 줄은 그대로 진행된다. */
 export const adminClose = (password, activity) => post("/api/booth/admin/close", { password, activity })
+/** 마감 해제 — 그 체험존의 줄을 처음부터 다시 시작한다(다음 예약이 1번). */
 export const adminReopen = (password, activity) => post("/api/booth/admin/reopen", { password, activity })
+
+/**
+ * 마감·해제 전에 한 번 더 묻는 문장. 푸터 입구와 운영 화면이 같은 말을 쓴다.
+ * 해제는 줄을 비우므로, 남아 있는 대기 팀이 있으면 몇 팀이 빠지는지 적는다.
+ */
+export function zoneConfirmText(label, closing, waiting = 0) {
+  if (closing) {
+    return (
+      `[${label}] 예약을 마감할까요?\n\n` +
+      `예약 화면에 "오늘은 마감되었어요. 내일 다시 만나요."가 뜨고 새 예약을 받지 않습니다. ` +
+      `이미 대기 중인 팀은 그대로 순서대로 진행됩니다.`
+    )
+  }
+  return (
+    `[${label}] 마감을 해제할까요?\n\n` +
+    `대기번호가 0으로 초기화되고, 다음 예약부터 1번으로 다시 받습니다.` +
+    (waiting > 0 ? `\n\n지금 대기 중인 ${waiting}팀은 줄에서 빠지고 호출 문자도 가지 않습니다.` : "")
+  )
+}
 
 /* 내가 넣은 예약은 이 기기에만 남긴다 — 서버는 누가 누구인지 묻지 않는다. */
 

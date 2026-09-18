@@ -33,8 +33,10 @@ export default function Reservation({ activity, title }) {
   const [offline, setOffline] = useState(false)
   /** 서버에서 한 번이라도 답을 받았는가. 받기 전에는 폼도 마감 안내도 띄우지 않는다. */
   const [loaded, setLoaded] = useState(false)
-  /** 오늘 이 체험존이 더 받지 않는가(마감했거나 정원이 찼다). */
+  /** 이 체험존이 새 예약을 받지 않는가(운영자가 마감했다). */
   const [shut, setShut] = useState(false)
+  /** 들고 있던 예약이 줄 초기화(마감 해제)로 빠졌다 — 폼 위에 한 줄로 알린다. */
+  const [restarted, setRestarted] = useState(false)
   const [closedMessage, setClosedMessage] = useState(CLOSED_FALLBACK)
   const idRef = useRef(readBookings()[activity] ?? null)
   /**
@@ -59,10 +61,12 @@ export default function Reservation({ activity, title }) {
       if (data.closedMessage) setClosedMessage(data.closedMessage)
       setOffline(false)
       setLoaded(true)
-      // 대기 중인 예약만 들고 있는다. 완료·취소된 것, 그리고 **자정이 지나 만료된 것**은
-      // 버린다 — 어제 줄의 순서를 오늘 화면에 띄우면 "지금 입장해주세요"가 잘못 뜬다.
+      // 대기 중인 예약만 들고 있는다. 완료·취소된 것, **자정이 지나 만료된 것**, 그리고
+      // **마감 해제로 줄이 새로 시작되며 빠진 것**은 버린다 — 옛 줄의 순서를 띄우면
+      // "지금 입장해주세요"가 잘못 뜨거나, 새 줄의 같은 번호와 겹친다.
       if (data.mine && data.mine.status === "waiting") setMine(data.mine)
       else if (asked) {
+        if (data.mine?.status === "reset") setRestarted(true)
         idRef.current = null
         // 그 사이 다른 탭이 새 예약을 저장했으면 그것까지 지우지 않는다.
         if (readBookings()[activity] === asked) forgetBooking(activity)
@@ -107,12 +111,16 @@ export default function Reservation({ activity, title }) {
     try {
       const data = await book({ activity, ...form })
       seqRef.current++ // 예약 전에 나간 새로고침 응답은 이제 낡았다
+      setRestarted(false)
       idRef.current = data.reservation.id
       rememberBooking(activity, data.reservation.id)
       setMine(data.reservation)
       setWaiting(data.reservation.waiting)
       setNotice(data.notice)
       setForm({ name: "", phone: "", dept: "" })
+      // 접수 문자를 보내는 몇 초 사이에 줄이 초기화됐을 수 있다. 곧바로 다시 물어
+      // 빠진 예약을 붙잡고 있지 않게 한다.
+      if (data.reservation.status !== "waiting") refresh()
     } catch (e) {
       if (e.code === "ALREADY_BOOKED" && e.data?.reservation) {
         // 이미 예약한 사람에게는 화내지 말고 자기 순서를 보여 준다.
@@ -122,7 +130,7 @@ export default function Reservation({ activity, title }) {
         setMine(e.data.reservation)
         setError("")
       } else if (e.code === "CLOSED") {
-        // 폼을 채우는 사이에 마감됐거나 정원이 찼다. 오류가 아니라 안내로 바꿔 보여 준다.
+        // 폼을 채우는 사이에 마감됐다. 오류가 아니라 안내로 바꿔 보여 준다.
         seqRef.current++
         setShut(true)
         if (e.message) setClosedMessage(e.message)
@@ -153,8 +161,8 @@ export default function Reservation({ activity, title }) {
       </div>
 
       {/* 순서: 내 예약이 있으면 그것 → 서버 답을 아직 못 받았으면 기다림 →
-          오늘 마감이면 안내 → 아니면 폼.
-          정원이 차서 막혔어도 이미 줄에 선 사람은 자기 순서를 계속 봐야 한다.
+          마감이면 안내 → 아니면 폼.
+          마감됐어도 이미 줄에 선 사람은 자기 순서를 계속 봐야 한다.
           답을 받기 전에 폼부터 띄우면, 마감된 체험존에서도 폼이 보이고 느린
           와이파이에서는 사람들이 거기에 이름을 치기 시작한다. */}
       {mine ? (
@@ -177,6 +185,11 @@ export default function Reservation({ activity, title }) {
         </div>
       ) : (
         <form className="book__form" onSubmit={submit}>
+          {restarted ? (
+            <p className="book__restart" role="status">
+              대기 줄이 새로 시작되었어요. 다시 예약해 주세요.
+            </p>
+          ) : null}
           <label className="field">
             <span>이름</span>
             <input
