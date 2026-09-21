@@ -398,6 +398,107 @@ try {
   ok("어제 초기화로 빠진 기록은 '초기화'로 남음", all.filter((r) => r.day === dayBefore && r.status === "reset").length === 1)
   await M.stop()
 
+  /* ================================================================ U */
+  console.log("\n━━ U. 사용자 취소 — 예약한 사람이 자기 화면에서")
+  const U = await startServer(8968, { BOOTH_RATE_PER_MIN: "100000" })
+  const u = []
+  // 예약한 기기만 가진 취소 열쇠(예약 응답에서 한 번만 온다)
+  const keys = {}
+  for (let i = 0; i < 8; i++) {
+    const b = await book(U, "register", 5000 + i)
+    keys[b.d.reservation.id] = b.d.cancelKey
+    u.push(b.d.reservation)
+  }
+  const uc = (id, key = keys[id]) => U.post("/reservations/cancel", { id, key })
+  ok("예약 응답에 취소 열쇠(32자)", Object.values(keys).every((k) => typeof k === "string" && k.length === 32))
+  ok("예약마다 열쇠가 다르다", new Set(Object.values(keys)).size === 8)
+
+  console.log("   … 남의 번호만 아는 사람이 취소하려 하면")
+  const victim0 = u[4]
+  const probeB = await book(U, "register", 5004, "남의번호") // 피해자의 번호로 다시 예약 시도
+  ok("같은 번호로 예약하면 ALREADY_BOOKED", probeB.s === 409 && probeB.d.error === "ALREADY_BOOKED")
+  ok("그 응답에는 취소 열쇠가 없다", !("cancelKey" in probeB.d) && !("cancelKey" in (probeB.d.reservation ?? {})))
+  ok("그 응답에는 이름·번호가 없다(남에게 새지 않게)", !("name" in probeB.d.reservation) && !JSON.stringify(probeB.d).includes("0105004") && !JSON.stringify(probeB.d).includes("손님"))
+  const steal = await U.post("/reservations/cancel", { id: probeB.d.reservation.id }) // 열쇠 없이
+  ok("id 만으로는 취소 불가(404)", steal.s === 404, `${steal.s} ${steal.d.error}`)
+  ok("틀린 열쇠로도 취소 불가(404)", (await uc(victim0.id, "0".repeat(32))).s === 404)
+  ok("다른 예약의 열쇠로도 취소 불가(404)", (await uc(victim0.id, keys[u[5].id])).s === 404)
+  ok("열쇠 모양이 이상해도(숫자·배열) 404", (await U.post("/reservations/cancel", { id: victim0.id, key: 12345 })).s === 404 && (await U.post("/reservations/cancel", { id: victim0.id, key: [keys[victim0.id]] })).s === 404)
+  ok("피해자의 예약은 그대로 대기", (await U.get(`/queue?id=${victim0.id}`)).d.mine.status === "waiting")
+  const qv = await U.get(`/queue?id=${victim0.id}`)
+  ok("조회 응답에도 열쇠·이름이 없다", !JSON.stringify(qv.d).includes(keys[victim0.id]) && !("name" in qv.d.mine))
+  const al = await admin(U)
+  ok("운영 목록에도 열쇠는 없다", !JSON.stringify(al.d).includes(keys[victim0.id]))
+  ok("운영 목록에는 이름이 있다", al.d.reservations.every((r) => typeof r.name === "string" && r.name))
+  const ahd = async (id) => (await U.get(`/queue?id=${id}`)).d.mine
+
+  ok("시작: 8번은 앞 7팀", (await ahd(u[7].id)).ahead === 7)
+  const c3 = await uc(u[2].id)
+  ok("3번 본인 취소 → 200", c3.s === 200 && c3.d.ok === true, `${c3.s} ${c3.d.error ?? ""}`)
+  ok("응답의 상태는 cancelled", c3.d.reservation?.status === "cancelled")
+  ok("취소한 사람의 조회: cancelled · 순서 없음", (await ahd(u[2].id)).status === "cancelled" && (await ahd(u[2].id)).ahead === null)
+  ok("뒤에 선 8번은 곧바로 앞 6팀(취소한 팀은 세지 않음)", (await ahd(u[7].id)).ahead === 6)
+  ok("앞에 선 1·2번은 그대로(앞 0·1팀)", (await ahd(u[0].id)).ahead === 0 && (await ahd(u[1].id)).ahead === 1)
+  ok("대기 수 7", (await U.get("/queue")).d.counts.register === 7)
+  const ul = (await admin(U)).d.reservations
+  ok("운영 목록: 3번은 cancelledBy=user(사용자 취소)", ul.find((r) => r.id === u[2].id)?.cancelledBy === "user")
+  ok("운영 목록: 대기 중인 팀은 cancelledBy 없음", ul.filter((r) => r.status === "waiting").every((r) => r.cancelledBy === null))
+
+  const ac = await U.post("/admin/cancel", { password: PW, id: u[3].id })
+  ok("4번 관리자 취소 → 200", ac.s === 200)
+  ok("운영 목록: 4번은 cancelledBy=admin(관리자 취소)", (await admin(U)).d.reservations.find((r) => r.id === u[3].id)?.cancelledBy === "admin")
+  ok("8번 앞 5팀", (await ahd(u[7].id)).ahead === 5)
+
+  const again3 = await uc(u[2].id)
+  ok("취소를 두 번 → 409 NOT_WAITING(두 번째는 아무것도 안 함)", again3.s === 409 && again3.d.error === "NOT_WAITING")
+  ok("관리자가 이미 취소한 예약을 본인이 취소 → 409", (await uc(u[3].id)).s === 409)
+  ok("본인이 취소한 예약을 관리자가 취소 → 409", (await U.post("/admin/cancel", { password: PW, id: u[2].id })).s === 409)
+  ok("본인이 취소한 예약을 체험 완료 → 409", (await U.post("/admin/complete", { password: PW, id: u[2].id })).s === 409)
+  ok("모르는 id → 404", (await uc("ffffffffffff")).s === 404)
+  ok("빈 id → 404", (await uc("")).s === 404)
+  ok("id 없이 → 404", (await U.post("/reservations/cancel", {})).s === 404)
+
+  await U.post("/admin/complete", { password: PW, id: u[0].id })
+  ok("체험을 마친 사람은 취소 불가(409)", (await uc(u[0].id)).s === 409)
+  ok("체험 완료는 여전히 '완료'로 남음(취소로 덮이지 않음)", (await admin(U)).d.reservations.find((r) => r.id === u[0].id)?.status === "done")
+
+  // 운영자의 완료와 본인의 취소가 같은 순간에 — 둘 중 하나만 된다
+  const race = await Promise.all([uc(u[1].id), U.post("/admin/complete", { password: PW, id: u[1].id })])
+  const wins = race.filter((x) => x.s === 200).length
+  ok("본인 취소와 운영자 완료가 동시에 → 정확히 하나만 성공", wins === 1, race.map((x) => x.s).join(","))
+  const raced = (await admin(U)).d.reservations.find((r) => r.id === u[1].id)
+  ok("…그리고 상태가 이긴 쪽과 일치", (race[0].s === 200 && raced.status === "cancelled" && raced.cancelledBy === "user") || (race[1].s === 200 && raced.status === "done"))
+
+  const rb = await book(U, "register", 5002) // 3번이 같은 번호로 다시
+  keys[rb.d.reservation?.id] = rb.d.cancelKey
+  ok("취소한 사람은 다시 예약할 수 있다(맨 뒤, 새 번호 9)", rb.s === 200 && rb.d.reservation.teamNo === 9, `${rb.s} ${rb.d.reservation?.teamNo}`)
+  ok("대기 중인 사람은 다시 예약하면 자기 순서(ALREADY_BOOKED)", (await book(U, "register", 5007)).d.error === "ALREADY_BOOKED")
+
+  await U.post("/admin/close", { password: PW, activity: "register" })
+  const uClosed = await uc(u[7].id)
+  ok("마감 중에도 본인 취소는 된다", uClosed.s === 200)
+  ok("마감 중 취소한 사람은 다시 예약 불가(마감)", (await book(U, "register", 5007)).d.error === "CLOSED")
+  const rbw = (await admin(U)).d.reservations.filter((r) => r.activity === "register" && r.status === "waiting")
+  await U.post("/admin/reopen", { password: PW, activity: "register", reset: true })
+  ok("줄 초기화로 빠진 예약은 본인 취소 불가(409)", (await uc(rbw[0].id)).s === 409)
+  await U.stop()
+
+  // 이 기능 전의 취소 기록(누가 취소했는지 적혀 있지 않다)은 관리자 취소로 보인다
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), "booth-legacy-"))
+  const legacyDay = new Date(Date.now() + KST).toISOString().slice(0, 10)
+  fs.writeFileSync(
+    path.join(legacyDir, "booth.json"),
+    JSON.stringify({
+      reservations: [
+        { id: "aaaaaaaaaaaa", activity: "seek", name: "예전", phone: "01011112222", dept: "x", day: legacyDay, teamNo: 1, status: "cancelled", createdAt: new Date().toISOString(), doneAt: new Date().toISOString(), notices: [] },
+      ],
+      closed: {},
+    })
+  )
+  const L = await startServer(8969, { BOOTH_DATA_DIR: legacyDir })
+  ok("예전 취소 기록 → 관리자 취소로 표시", (await admin(L)).d.reservations[0]?.cancelledBy === "admin")
+  await L.stop()
+
   /* ================================================================ F */
   console.log("\n━━ F. 한국 날짜 계산 — 서버가 UTC 로 돌아도 한국 00시에 바뀌는가")
   const kst = (iso) => new Date(Date.parse(iso) + KST).toISOString().slice(0, 10)

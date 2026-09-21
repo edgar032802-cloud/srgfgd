@@ -283,9 +283,6 @@ const adminZones = (day = today()) =>
     })
   )
 
-/** 번호는 저장하되 밖으로는 뒤 네 자리만 보낸다. */
-const maskPhone = (phone) => (String(phone).length > 4 ? "***" + String(phone).slice(-4) : String(phone))
-
 const publicView = (r, wait = waitingOn) => ({
   id: r.id,
   activity: r.activity,
@@ -294,8 +291,9 @@ const publicView = (r, wait = waitingOn) => ({
   status: statusOf(r),
   ahead: aheadOf(r, wait),
   waiting: wait(r.activity, dayOf(r)).length,
-  name: r.name,
-  phoneMasked: maskPhone(r.phone),
+  // 이름·번호는 싣지 않는다. 이 모양은 예약 id 나 **전화번호만 아는 남**에게도 나간다
+  // (같은 번호로 다시 예약하면 "이미 예약하셨습니다"와 함께 돌아간다). 방문자 화면은
+  // 대기번호와 순서만 쓴다. 이름은 운영 화면(adminView)에만 있다.
   calledAt: r.calledAt ?? null,
 })
 
@@ -318,6 +316,7 @@ function callupState(r) {
 
 const adminView = (r, wait = waitingOn) => ({
   ...publicView(r, wait),
+  name: r.name,
   phone: r.phone,
   dept: r.dept,
   createdAt: r.createdAt,
@@ -326,6 +325,9 @@ const adminView = (r, wait = waitingOn) => ({
   callup: callupState(r),
   callupFailures: r.callupFailures ?? 0,
   round: roundOfRes(r),
+  // 누가 취소했는가. 방문자가 자기 화면에서 취소할 수 있게 되기 전(2026-09-21)의 취소는
+  // 모두 운영자가 누른 것이므로, 표시가 없는 옛 취소는 관리자 취소로 친다.
+  cancelledBy: r.status === "cancelled" ? (r.cancelledBy === "user" ? "user" : "admin") : null,
   // 오늘의 지금 줄에 속하는가. 운영 화면의 체험존별 목록은 이것만 띄운다 —
   // 초기화 전 줄까지 섞으면 1번이 둘 보인다. 지난 줄은 이름 검색으로 찾는다.
   current: dayOf(r) === today() && inCurrentRound(r),
@@ -714,6 +716,8 @@ router.post("/reservations", async (req, res) => {
     day,
     round: roundOn(value.activity, day),
     teamNo: nextTeamNo(value.activity, day),
+    // 본인 취소용 열쇠. 예약한 그 기기에만 한 번 건네고, 어디에도 다시 내보내지 않는다.
+    cancelKey: crypto.randomBytes(16).toString("hex"),
     status: "waiting",
     createdAt: isoAt(t),
     calledAt: null,
@@ -735,7 +739,11 @@ router.post("/reservations", async (req, res) => {
   record(reservation, "booked", result)
   save()
 
-  res.json({ reservation: publicView(reservation), notice: { status: result.status, channel: result.channel } })
+  res.json({
+    reservation: publicView(reservation),
+    notice: { status: result.status, channel: result.channel },
+    cancelKey: reservation.cancelKey,
+  })
 
   // 2) 줄이 짧아서 이미 부를 때가 됐으면 **따로 한 통 더.** 붙여 보내면
   //    "접수됐습니다"인지 "지금 오세요"인지 읽는 사람이 구분하지 못한다.
@@ -746,6 +754,49 @@ router.post("/reservations", async (req, res) => {
       callUpDue(reservation.activity, day).catch((e) => console.error("[booth] 호출 발송 실패", e.message))
     }, CALL_DELAY_MS)
   }
+})
+
+/**
+ * 열쇠 비교. 둘 다 글자여야 한다(배열·숫자를 글자로 바꿔 맞추지 않는다). 길이가 다르면
+ * 바로 거짓, 같으면 걸리는 시간이 내용과 상관없게.
+ */
+const sameKey = (stored, given) => {
+  if (typeof stored !== "string" || typeof given !== "string" || !stored) return false
+  const x = Buffer.from(stored)
+  const y = Buffer.from(given)
+  return x.length === y.length && crypto.timingSafeEqual(x, y)
+}
+
+/**
+ * 예약한 사람이 자기 화면에서 취소한다.
+ *
+ * **예약 id 만으로는 안 된다.** id 는 같은 번호로 다시 예약하려는 사람에게 "이미
+ * 예약하셨습니다"와 함께 돌아가므로, 남의 번호만 알면 id 를 얻을 수 있다(검토에서
+ * 재현됨). 그래서 예약할 때 **그 기기에만 한 번** 건넨 취소 열쇠(cancelKey)를 함께
+ * 받는다. 열쇠는 조회·운영 목록 어디에도 다시 나가지 않는다. 틀리면 "없는 예약"과
+ * 똑같이 답해 예약이 있는지조차 알려 주지 않는다.
+ *
+ * 오늘 지금 줄에서 대기 중일 때만 된다. 운영 화면에는 곧바로(알림으로) "사용자 취소"로
+ * 보이고, 뒤에 선 팀들이 한 칸씩 당겨진다.
+ */
+router.post("/reservations/cancel", (req, res) => {
+  if (tooMany(req.ip)) {
+    return res.status(429).json({ error: "TOO_MANY", message: "잠시 후 다시 시도해 주세요." })
+  }
+  const id = String(req.body?.id ?? "")
+  const r = id ? state.reservations.find((x) => x.id === id) : null
+  if (!r || !sameKey(r.cancelKey, req.body?.key)) {
+    return res.status(404).json({ error: "UNKNOWN_RESERVATION", message: "예약을 찾을 수 없습니다." })
+  }
+  if (statusOf(r) !== "waiting") {
+    return res.status(409).json({
+      error: "NOT_WAITING",
+      message: "이미 끝났거나 취소된 예약입니다.",
+      reservation: publicView(r),
+    })
+  }
+  takeOut(r, "cancelled", "user")
+  res.json({ ok: true, reservation: publicView(r) })
 })
 
 router.post("/admin/list", requireAdmin, (req, res) => {
@@ -782,22 +833,31 @@ const RELOAD = { error: "RELOAD", message: "화면이 예전 것입니다. 새�
 const fromCurrentScreen = (req) => Boolean(req.get("X-Client-Build"))
 
 /** 줄에서 빼는 두 동작(완료·취소)의 공통 부분. 오늘 대기 중인 예약만 받는다. */
+/**
+ * 줄에서 뺀다(완료·관리자 취소·사용자 취소 공통). 부르는 쪽이 "오늘 지금 줄에서 대기
+ * 중"인지 먼저 확인한다. 이 안에는 await 가 없다 — 확인과 변경 사이에 다른 요청이
+ * 끼어들 틈이 없어서, 같은 팀을 운영자와 본인이 동시에 눌러도 한쪽만 된다.
+ *
+ * 호출 문자는 기다리지 않는다. 체험존마다 한 줄로 서서 차례로 나가므로, 기다리면 여러
+ * 통을 보내는 중일 때 버튼이 몇 초씩 멈춘다. 상태는 이미 바뀌었으니 뒤에서 도는 호출도
+ * 새 줄 기준으로 계산한다.
+ */
+function takeOut(r, status, by) {
+  r.status = status
+  r.doneAt = isoAt(nowMs())
+  if (status === "cancelled") r.cancelledBy = by
+  save()
+  changed()
+  callUpDue(r.activity, dayOf(r))
+}
+
 function closeOne(req, res, status) {
   const r = state.reservations.find((x) => x.id === String(req.body?.id ?? ""))
   if (!r) return res.status(404).json({ error: "UNKNOWN_RESERVATION", message: "예약을 찾을 수 없습니다." })
   if (statusOf(r) !== "waiting") {
-    return res.status(409).json({ error: "ALREADY_CLOSED", message: "이미 끝났거나 지난날의 예약입니다." })
+    return res.status(409).json({ error: "ALREADY_CLOSED", message: "이미 끝났거나 취소된 예약입니다." })
   }
-
-  r.status = status
-  r.doneAt = isoAt(nowMs())
-  save()
-  changed()
-
-  // 응답을 먼저 돌려준다. 호출 문자는 체험존마다 한 줄로 서서 차례로 나가므로,
-  // 기다리면 여러 통을 보내는 중일 때 운영자의 버튼이 몇 초씩 멈춘다.
-  // 상태는 위에서 이미 바뀌었으니, 뒤에서 도는 호출도 새 줄 기준으로 계산한다.
-  callUpDue(r.activity, dayOf(r))
+  takeOut(r, status, "admin")
   res.json({ ok: true, counts: counts(), zones: adminZones() })
 }
 

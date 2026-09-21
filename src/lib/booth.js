@@ -55,6 +55,11 @@ export function book({ activity, name, phone, dept }) {
   return post("/api/booth/reservations", { activity, name, phone, dept })
 }
 
+/** 내 예약 취소. 예약할 때 이 기기에만 건네받은 취소 열쇠가 있어야 한다. */
+export function cancelBooking(id, key) {
+  return post("/api/booth/reservations/cancel", { id, key })
+}
+
 export const adminList = (password) => post("/api/booth/admin/list", { password }, READ_TIMEOUT_MS)
 /** 체험존 넷의 상태만. 마감 버튼 판은 명단이 필요 없다 — 이름·번호를 매번 받아 오지 않는다. */
 export const adminZones = (password) => post("/api/booth/admin/zones", { password }, READ_TIMEOUT_MS)
@@ -109,6 +114,33 @@ export function rememberBooking(activity, id) {
     localStorage.setItem(KEY, JSON.stringify({ ...readBookings(), [activity]: id }))
   } catch {
     // 저장소를 못 쓰는 브라우저 — 이번 화면에서만 순서를 보여 준다.
+  }
+}
+
+const CANCEL_KEYS = "freesiaCancelKeys"
+
+/**
+ * 본인 취소 열쇠를 예약 id 별로 기억한다. 서버는 예약한 그 응답에서만 한 번 건넨다 —
+ * 같은 번호로 다른 기기에서 들어와 자기 순서를 보는 것은 되지만, 그 기기에서는 취소
+ * 버튼이 나오지 않는다(남의 번호로 들어와 취소하는 길을 막는다).
+ */
+export function rememberCancelKey(id, key) {
+  if (!id || !key) return
+  try {
+    const all = JSON.parse(localStorage.getItem(CANCEL_KEYS) ?? "{}") ?? {}
+    const kept = Object.fromEntries(Object.entries(all).slice(-20))
+    localStorage.setItem(CANCEL_KEYS, JSON.stringify({ ...kept, [id]: key }))
+  } catch {
+    // 저장소를 못 쓰는 브라우저 — 이번 화면에서만 취소할 수 있다
+  }
+}
+
+export function readCancelKey(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(CANCEL_KEYS) ?? "{}") ?? {}
+    return typeof all[id] === "string" ? all[id] : ""
+  } catch {
+    return ""
   }
 }
 

@@ -15,6 +15,21 @@ import { holdReload } from "../lib/build.js"
 import { signalZonesChanged, useLive } from "../lib/live.js"
 import "../components/booth.css"
 
+/** 줄에서 빠진 이유 한 마디. 방문자가 자기 화면에서 취소하면 "사용자 취소", 이 화면의 취소 버튼은 "관리자 취소". */
+const endLabel = (r) =>
+  r.status === "done" ? "완료" : r.status === "cancelled" ? (r.cancelledBy === "user" ? "사용자 취소" : "관리자 취소") : ""
+
+/** " · 완료 3 · 사용자 취소 1 · 관리자 취소 2" — 0 인 것은 뺀다. */
+const endCounts = (list) => {
+  const n = (pred) => list.filter(pred).length
+  const parts = [
+    ["완료", n((r) => r.status === "done")],
+    ["사용자 취소", n((r) => r.status === "cancelled" && r.cancelledBy === "user")],
+    ["관리자 취소", n((r) => r.status === "cancelled" && r.cancelledBy !== "user")],
+  ].filter(([, k]) => k > 0)
+  return parts.map(([label, k]) => ` · ${label} ${k}`).join("")
+}
+
 const timeOf = (iso) => {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? "" : d.toTimeString().slice(0, 5)
@@ -71,9 +86,9 @@ export default function BoothAdmin() {
   }, [password])
 
   // 처음 한 번, 서버가 "바뀌었다"고 알릴 때, 화면이 다시 보일 때, 그리고 주기적으로.
-  // 이 화면은 한 번에 명단 전체를 받으므로, 줄이 몰릴 때는 알림을 2.5초씩 묶는다.
+  // 이 화면은 한 번에 명단 전체를 받으므로, 줄이 몰릴 때는 알림을 1초씩 묶는다.
   // (내가 누른 것은 서버의 답으로 곧바로 반영하니 이 간격과 상관없다.)
-  useLive(load, { fastMs: 5000, slowMs: 15000, minGapMs: 2500 })
+  useLive(load, { fastMs: 5000, slowMs: 15000, minGapMs: 1000 })
   // 이 화면에서 비밀번호를 막 넣은 경우 — 다음 주기를 기다리지 않고 곧바로 부른다.
   useEffect(() => {
     load()
@@ -81,21 +96,34 @@ export default function BoothAdmin() {
 
   if (!password) return <Gate onPass={(pw) => { savePassword(pw); setPassword(pw) }} />
 
-  const act = async (fn, id) => {
+  /**
+   * 체험 완료·관리자 취소. 실패 이유(예: 방문자가 방금 스스로 취소했다)는 그 체험존 밑에
+   * 남긴다 — 화면 맨 위에 띄우면 곧이어 도는 목록 새로고침이 몇 밀리초 만에 지워 버렸다.
+   */
+  const act = async (fn, id, activity) => {
     setBusy(id)
     settle()
     holdReload(15000)
     try {
       await fn(password, id)
+      setZoneNotes((n) => (n[activity]?.error ? { ...n, [activity]: null } : n))
       // 그 줄을 곧바로 목록에서 뺀다. 명단을 다시 받아 오는 몇 초 동안 버튼이 다시 살아 있으면
       // 운영자가 한 번 더 누르고 "이미 끝난 예약"을 보게 된다.
       const status = fn === adminComplete ? "done" : "cancelled"
+      const cancelledBy = status === "cancelled" ? "admin" : null
       setData((d) =>
-        d ? { ...d, reservations: d.reservations.map((r) => (r.id === id ? { ...r, status, doneAt: new Date().toISOString() } : r)) } : d
+        d
+          ? {
+              ...d,
+              reservations: d.reservations.map((r) =>
+                r.id === id ? { ...r, status, cancelledBy, doneAt: new Date().toISOString() } : r
+              ),
+            }
+          : d
       )
       signalZonesChanged()
     } catch (e) {
-      setError(e.message)
+      setZoneNotes((n) => ({ ...n, [activity]: { text: e.message, error: true } }))
     } finally {
       settle()
       setBusy("")
@@ -160,9 +188,7 @@ export default function BoothAdmin() {
       {error ? <p className="book__error" role="alert">{error}</p> : null}
 
       {today ? (
-        <p className="admin__today">
-          {today} · 한국 시각 00시에 초기화 · 마감 해제하면 그 체험존 대기번호가 처음부터 다시 시작
-        </p>
+        <p className="admin__today">{today} · 00시에 초기화</p>
       ) : null}
 
       <ul className="admin__counts">
@@ -190,7 +216,10 @@ export default function BoothAdmin() {
         const waiting = todayRows
           .filter((r) => r.activity === id && r.status === "waiting")
           .sort((x, y) => (x.ahead ?? 0) - (y.ahead ?? 0))
-        const closed = todayRows.filter((r) => r.activity === id && r.status !== "waiting")
+        // 끝난 팀은 방금 끝난 것부터 — 방문자가 막 취소한 팀이 맨 위에 보이게.
+        const closed = todayRows
+          .filter((r) => r.activity === id && r.status !== "waiting")
+          .sort((x, y) => String(y.doneAt ?? "").localeCompare(String(x.doneAt ?? "")))
         return (
           <section className="admin__group" key={id}>
             <h2>
@@ -225,7 +254,7 @@ export default function BoothAdmin() {
                         className="admin__done"
                         type="button"
                         disabled={busy === r.id}
-                        onClick={() => act(adminComplete, r.id)}
+                        onClick={() => act(adminComplete, r.id, id)}
                       >
                         체험 완료
                       </button>
@@ -233,7 +262,7 @@ export default function BoothAdmin() {
                         className="admin__ghost"
                         type="button"
                         disabled={busy === r.id}
-                        onClick={() => act(adminCancel, r.id)}
+                        onClick={() => act(adminCancel, r.id, id)}
                       >
                         취소
                       </button>
@@ -244,16 +273,28 @@ export default function BoothAdmin() {
             )}
 
             {closed.length ? (
+              <>
+                {/* 가장 최근에 끝난 팀 한 줄은 늘 보인다 — 취소를 누르면 곧바로 "관리자 취소",
+                    방문자가 취소하면 곧바로 "사용자 취소"가 여기에 뜬다. */}
+                <p className="admin__last">
+                  최근 {closed[0].teamNo}번 {closed[0].name} ·{" "}
+                  <span className={closed[0].cancelledBy === "user" ? "end end--user" : "end"}>{endLabel(closed[0])}</span>{" "}
+                  {timeOf(closed[0].doneAt)}
+                </p>
               <details className="admin__closed">
-                <summary>끝난 팀 {closed.length}</summary>
+                <summary>
+                  끝난 팀 {closed.length}
+                  {endCounts(closed)}
+                </summary>
                 <ul>
                   {closed.map((r) => (
                     <li key={r.id}>
-                      {r.teamNo}번 {r.name} · {r.status === "done" ? "완료" : "취소"} {timeOf(r.doneAt)}
+                      {r.teamNo}번 {r.name} · <span className={r.cancelledBy === "user" ? "end end--user" : "end"}>{endLabel(r)}</span> {timeOf(r.doneAt)}
                     </li>
                   ))}
                 </ul>
               </details>
+              </>
             ) : null}
           </section>
         )
@@ -280,7 +321,7 @@ function CallupNote({ state }) {
  */
 function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
   const done = zone.done ?? 0
-  const since = zone.resetAt ? ` · ${timeOf(zone.resetAt)} 초기화 이후` : ""
+  const since = zone.resetAt ? ` · ${timeOf(zone.resetAt)} 초기화` : ""
   // 결과 한 줄은 그 결과가 아직 맞을 때만. 다른 기기가 상태를 바꿨으면 감춘다.
   const line = note && (note.error || note.closed === Boolean(zone.closed)) ? (
     <p className={note.error ? "zone__note zone__note--error" : "zone__note"} role={note.error ? "alert" : "status"}>
@@ -294,7 +335,7 @@ function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
         <div className="zone zone--closed">
           <span>
             <b>마감됨</b>
-            {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""} · 방문자에게 "오늘은 마감되었어요"가 보입니다
+            {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""}
           </span>
           <button className="zone__open" type="button" disabled={locked} onClick={onReopen}>
             {busy ? "처리 중" : "마감해제"}
@@ -309,7 +350,7 @@ function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
     <>
       <div className="zone">
         <span>
-          <b>예약 받는 중</b> · 체험 완료 {done}팀{since}
+          <b>예약 받는 중</b> · 완료 {done}팀{since}
         </span>
         <button className="zone__close" type="button" disabled={locked} onClick={onClose}>
           {busy ? "처리 중" : "마감"}
@@ -405,7 +446,7 @@ function Search({ query, onQuery, rows, activities, today }) {
 /** 대기 · 진행 중 · 완료 · 취소. "진행 중"은 그 줄의 맨 앞에 서 있다는 뜻이다. */
 function StateTag({ row }) {
   if (row.status === "done") return <span className="tag tag--done">완료</span>
-  if (row.status === "cancelled") return <span className="tag tag--off">취소</span>
+  if (row.status === "cancelled") return <span className="tag tag--off">{endLabel(row)}</span>
   // 날이 바뀔 때까지 차례가 오지 않은 예약. 오늘 줄에는 없다.
   if (row.status === "expired") return <span className="tag tag--off">만료</span>
   // 마감 해제로 줄이 새로 시작될 때 대기 중이던 예약.
@@ -435,8 +476,7 @@ function NotifyLine({ notify, password }) {
   if (!notify?.ready) {
     return (
       <p className="admin__notify admin__notify--off">
-        안내 발송이 <strong>연결되지 않았습니다</strong>. 키가 서버에 없습니다. 예약은 정상 접수되지만 문자는
-        나가지 않으니, 이 화면의 순서를 보고 직접 불러 주세요. (연결 방법은 docs/RESERVATION.md)
+        문자 발송이 <strong>연결되지 않았습니다</strong>. 예약은 되지만 문자는 나가지 않으니 순서를 보고 직접 불러 주세요.
       </p>
     )
   }

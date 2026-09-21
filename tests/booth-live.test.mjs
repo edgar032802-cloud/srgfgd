@@ -183,6 +183,15 @@ try {
   await probe("체험 완료", () => S.post("/admin/complete", { password: PW, id: b1.d.reservation.id }))
   const w = (await S.post("/admin/list", { password: PW })).d.reservations.find((r) => r.status === "waiting")
   await probe("취소", () => S.post("/admin/cancel", { password: PW, id: w.id }))
+  const mineU = await book(S, "seek", 3)
+  await sleep(300)
+  const ucBody = { id: mineU.d.reservation.id, key: mineU.d.cancelKey }
+  await probe("사용자 취소(방문자 화면)", () => S.post("/reservations/cancel", ucBody))
+  const q409 = messages(st).length
+  await S.post("/reservations/cancel", ucBody) // 두 번째 — 바뀐 것 없음
+  await S.post("/reservations/cancel", { id: mineU.d.reservation.id }) // 열쇠 없이 — 거절, 바뀐 것 없음
+  await sleep(400)
+  ok("이미 취소된 예약을 또 취소해도 알림 없음", messages(st).length === q409)
 
   const noop = messages(st).length
   await S.post("/admin/close", { password: PW, activity: "avoid" })

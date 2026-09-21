@@ -253,9 +253,34 @@
   word-break: keep-all;
 }
 
-.standing__fine {
-  font-size: 11px;
+/* 예약 취소 — 눈에 띄되 주인공(앞에 N팀)보다 앞서지 않게. 손가락 크기는 지킨다. */
+.standing__cancel {
+  height: 40px;
+  margin-top: 6px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.standing__cancel:disabled {
   color: var(--ink-3);
+  cursor: default;
+}
+
+/* 방금 한 일을 알리는 한 줄(예약 취소). 안내라서 노랑이 아니라 옅은 면. */
+.book__note {
+  padding: 12px 14px;
+  border-radius: var(--r);
+  background: var(--fill);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
 }
 
 /* ------------------------------------------------------------ 비밀번호 창 */
@@ -771,6 +796,12 @@
   cursor: default;
 }
 
+/* 끝난 팀의 이유. 방문자가 스스로 취소한 것만 살짝 드러낸다. */
+.end--user {
+  font-weight: 700;
+  color: #8a3a29;
+}
+
 /* 방금 누른 결과 한 줄 — 버튼 바로 밑. 화면 맨 위에 띄우면 휴대폰에서는 안 보인다. */
 .zone__note {
   margin: -6px 0 12px;
@@ -881,8 +912,15 @@
   cursor: default;
 }
 
-.admin__closed {
+/* 가장 최근에 끝난 팀 한 줄 — 접힌 목록을 열지 않아도 방금 누른 결과가 보인다. */
+.admin__last {
   margin-top: 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.admin__closed {
+  margin-top: 6px;
   font-size: 12px;
   color: var(--ink-3);
 }
