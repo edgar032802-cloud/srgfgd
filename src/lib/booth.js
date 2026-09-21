@@ -2,6 +2,15 @@ import { CLIENT_BUILD, checkBuild } from "./build.js"
 
 /** 읽기 요청이 이보다 오래 걸리면 버린다. 매달린 요청 하나가 화면을 붙잡지 않게. */
 const READ_TIMEOUT_MS = 10000
+/**
+ * 쓰기(마감·취소·완료) 요청의 한도. 예전에는 쓰기에 한도가 없었다 — 휴대폰이 와이파이와
+ * LTE 를 오가거나 잠깐 잠들면 요청이 영영 돌아오지 않을 수 있고, 그동안 버튼은 "처리 중"에
+ * 묶여 **새로고침해야 다시 눌렸다.** 한도를 넘기면 실패로 알리고, 화면은 서버의 실제
+ * 상태를 다시 물어 맞춘다(서버에서 이미 됐다면 그대로 보인다).
+ */
+const WRITE_TIMEOUT_MS = 15000
+/** 예약은 서버가 접수 문자를 보내고 나서 답하므로 조금 더 기다린다. */
+const BOOK_TIMEOUT_MS = 30000
 
 async function json(response) {
   checkBuild(response.headers.get("X-Build"))
@@ -16,10 +25,10 @@ async function json(response) {
 }
 
 /**
- * `timeout` 은 **읽기에만** 준다. 예약·마감 같은 쓰기는 서버가 문자를 보내느라 몇 초
- * 걸릴 수 있고, 중간에 끊으면 서버에서는 됐는데 화면은 실패로 안다.
+ * 모든 요청에 한도가 있다(읽기 10초, 쓰기 15초, 예약 30초). 한도를 넘기면 "응답이 늦습니다"로
+ * 실패하고, 부르는 쪽은 서버에 실제 상태를 다시 물어 화면을 맞춘다.
  */
-function request(path, init = {}, timeout = 0) {
+function request(path, init = {}, timeout = WRITE_TIMEOUT_MS) {
   const ctrl = timeout ? new AbortController() : null
   const timer = ctrl ? setTimeout(() => ctrl.abort(), timeout) : 0
   // 이 화면의 빌드 이름을 싣는다. 서버는 이것이 없는 옛 화면의 마감·해제를 "새로고침해
@@ -38,7 +47,7 @@ function request(path, init = {}, timeout = 0) {
     .finally(() => clearTimeout(timer))
 }
 
-const post = (path, body, timeout) =>
+const post = (path, body, timeout = WRITE_TIMEOUT_MS) =>
   request(
     path,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
@@ -52,7 +61,7 @@ export function fetchQueue(id) {
 }
 
 export function book({ activity, name, phone, dept }) {
-  return post("/api/booth/reservations", { activity, name, phone, dept })
+  return post("/api/booth/reservations", { activity, name, phone, dept }, BOOK_TIMEOUT_MS)
 }
 
 /** 내 예약 취소. 예약할 때 이 기기에만 건네받은 취소 열쇠가 있어야 한다. */
@@ -76,22 +85,18 @@ export const adminClose = (password, activity) => post("/api/booth/admin/close",
 export const adminReopen = (password, activity) => post("/api/booth/admin/reopen", { password, activity, reset: true })
 
 /**
- * 마감·해제 전에 한 번 더 묻는 문장. 푸터 입구와 운영 화면이 같은 말을 쓴다.
+ * 마감·해제 전에 그 자리에서 한 번 더 묻는 한 줄. 푸터 입구와 운영 화면이 같은 말을 쓴다.
  * 해제는 줄을 비우므로, 남아 있는 대기 팀이 있으면 몇 팀이 빠지는지 적는다.
+ *
+ * 브라우저 확인 창(window.confirm)은 쓰지 않는다. 휴대폰 브라우저는 확인 창이 몇 번
+ * 이어지면 "이 페이지의 대화상자 차단"으로 막아 버리고, 그 뒤로는 버튼을 눌러도 아무 일도
+ * 일어나지 않는다 — 새로고침해야 풀린다. 앱 안 브라우저는 아예 띄우지 않기도 한다.
  */
-export function zoneConfirmText(label, closing, waiting = 0) {
-  if (closing) {
-    return (
-      `[${label}] 예약을 마감할까요?\n\n` +
-      `예약 화면에 "오늘은 마감되었어요. 내일 다시 만나요."가 뜨고 새 예약을 받지 않습니다. ` +
-      `이미 대기 중인 팀은 그대로 순서대로 진행됩니다.`
-    )
-  }
-  return (
-    `[${label}] 마감을 해제할까요?\n\n` +
-    `대기번호가 0으로 초기화되고, 다음 예약부터 1번으로 다시 받습니다.` +
-    (waiting > 0 ? `\n\n지금 대기 중인 ${waiting}팀은 줄에서 빠지고 호출 문자도 가지 않습니다.` : "")
-  )
+export function zoneQuestion(closing, waiting = 0) {
+  if (closing) return "마감할까요? 새 예약을 받지 않아요."
+  return waiting > 0
+    ? `마감해제할까요? 대기 ${waiting}팀이 빠지고 1번부터 다시 받아요.`
+    : "마감해제할까요? 1번부터 다시 받아요."
 }
 
 /* 내가 넣은 예약은 이 기기에만 남긴다 — 서버는 누가 누구인지 묻지 않는다. */

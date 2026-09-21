@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 
-import { adminClose, adminList, adminReopen, adminZones, zoneConfirmText } from "../lib/booth.js"
+import { adminClose, adminList, adminReopen, adminZones, zoneQuestion } from "../lib/booth.js"
 import { holdReload } from "../lib/build.js"
 import { signalZonesChanged, useLive } from "../lib/live.js"
 import { savePassword } from "../lib/adminSession.js"
@@ -183,6 +183,13 @@ function ZonePanel({ password, activities, zones: initial, onClose }) {
    * 남아 있으면 운영자는 둘 중 무엇을 믿어야 할지 모른다.
    */
   const [note, setNote] = useState(null)
+  /**
+   * 한 번 더 묻는 중인 체험존 { id, closing }. 브라우저 확인 창 대신 그 줄 안에서 묻는다
+   * (확인 창은 몇 번 이어지면 브라우저가 막아 버려, 새로고침 전까지 버튼이 먹지 않았다).
+   * 할 일(마감/해제)은 **물을 때 정해 둔다** — 묻는 사이 다른 기기가 상태를 바꿔도
+   * 손가락 밑의 버튼이 반대 동작으로 뒤집히지 않게.
+   */
+  const [asking, setAsking] = useState(null)
   /** 같은 순간 두 번 눌려도 한 번만 보낸다. 상태(busy)는 다음 그림에서야 바뀐다. */
   const busyRef = useRef(false)
   const genRef = useRef(0)
@@ -199,11 +206,16 @@ function ZonePanel({ password, activities, zones: initial, onClose }) {
   }
   useLive(reload, { fastMs: 5000, slowMs: 15000 })
 
-  const toggle = async (id, label) => {
+  const ask = (id) => {
     if (busyRef.current) return
-    const zone = zones[id] ?? {}
-    const closing = !zone.closed
-    if (!window.confirm(zoneConfirmText(label, closing, zone.waiting ?? 0))) return
+    setError("")
+    setNote(null)
+    setAsking({ id, closing: !zones[id]?.closed })
+  }
+
+  const run = async (id, label, closing) => {
+    if (busyRef.current) return
+    setAsking(null)
     busyRef.current = true
     genRef.current++
     holdReload(15000) // 요청이 오가는 동안 화면이 새로 불러와지면 됐는지 모른다
@@ -241,22 +253,48 @@ function ZonePanel({ password, activities, zones: initial, onClose }) {
         <ul className="lockzones">
           {Object.entries(activities).map(([id, a]) => {
             const z = zones[id] ?? {}
+            const here = asking?.id === id ? asking : null
             return (
-              <li key={id} className={z.closed ? "lockzone is-closed" : "lockzone"}>
-                <div className="lockzone__info">
-                  <strong>{a.label}</strong>
-                  <span>
-                    {z.closed ? "마감됨" : "예약 받는 중"} · 대기 {z.waiting ?? 0}팀
-                  </span>
-                </div>
-                <button
-                  className={z.closed ? "lockzone__btn lockzone__btn--open" : "lockzone__btn"}
-                  type="button"
-                  disabled={Boolean(busy)}
-                  onClick={() => toggle(id, a.label)}
-                >
-                  {busy === id ? "처리 중" : z.closed ? "마감해제" : "마감"}
-                </button>
+              <li
+                key={id}
+                className={["lockzone", z.closed ? "is-closed" : "", here ? "is-asking" : ""].filter(Boolean).join(" ")}
+              >
+                {here ? (
+                  <>
+                    <p className="lockzone__ask" role="status">
+                      <strong>{a.label}</strong> {zoneQuestion(here.closing, z.waiting ?? 0)}
+                    </p>
+                    <div className="lockzone__acts">
+                      <button className="ask__no" type="button" onClick={() => setAsking(null)}>
+                        아니요
+                      </button>
+                      <button
+                        className={here.closing ? "lockzone__btn" : "lockzone__btn lockzone__btn--open"}
+                        type="button"
+                        onClick={() => run(id, a.label, here.closing)}
+                      >
+                        {here.closing ? "마감" : "마감해제"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="lockzone__info">
+                      <strong>{a.label}</strong>
+                      <span>
+                        {z.closed ? "마감됨" : "예약 받는 중"} · 대기 {z.waiting ?? 0}팀
+                      </span>
+                    </div>
+                    <button
+                      className={z.closed ? "lockzone__btn lockzone__btn--open" : "lockzone__btn"}
+                      type="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => ask(id)}
+                    >
+                      {busy === id ? "처리 중" : z.closed ? "마감해제" : "마감"}
+                    </button>
+                  </>
+                )}
               </li>
             )
           })}

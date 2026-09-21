@@ -8,7 +8,7 @@ import {
   adminReopen,
   adminTest,
   formatPhone,
-  zoneConfirmText,
+  zoneQuestion,
 } from "../lib/booth.js"
 import { readPassword, savePassword } from "../lib/adminSession.js"
 import { holdReload } from "../lib/build.js"
@@ -134,15 +134,15 @@ export default function BoothAdmin() {
 
   /**
    * 마감·해제. 마감은 새 예약을 모두 막고, 해제는 그 체험존의 줄을 처음부터 다시
-   * 시작하므로(대기 0, 다음 예약 1번) 둘 다 한 번 더 묻는다.
+   * 시작하므로(대기 0, 다음 예약 1번) 둘 다 한 번 더 묻는다 — 브라우저 확인 창이 아니라
+   * 그 줄 안에서(ZoneBar). 확인 창은 몇 번 이어지면 브라우저가 막아 버려 새로고침
+   * 전까지 버튼이 먹지 않았다.
    *
    * 버튼은 **서버의 답으로 곧바로** 바꾼다. 예전에는 답을 버리고 목록 전체를 다시
    * 받아 온 뒤에야 바뀌어서, 느린 연결에서는 눌러도 그대로인 것처럼 보였다.
    */
   const toggleZone = async (id, label, closing) => {
     if (zoneBusyRef.current) return
-    const waitingNow = data?.zones?.[id]?.waiting ?? 0
-    if (!window.confirm(zoneConfirmText(label, closing, waitingNow))) return
     zoneBusyRef.current = true
     setZoneBusy(id)
     setZoneNotes((n) => ({ ...n, [id]: null }))
@@ -231,8 +231,7 @@ export default function BoothAdmin() {
               busy={zoneBusy === id}
               locked={Boolean(zoneBusy)}
               note={zoneNotes[id]}
-              onClose={() => toggleZone(id, a.label, true)}
-              onReopen={() => toggleZone(id, a.label, false)}
+              onRun={(closing) => toggleZone(id, a.label, closing)}
             />
 
             {waiting.length === 0 ? (
@@ -319,7 +318,9 @@ function CallupNote({ state }) {
  * 닫히는 일은 없다), 마감된 체험존은 버튼이 "마감해제"로 바뀐다. 해제하면 그
  * 체험존의 줄이 처음부터 다시 시작한다.
  */
-function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
+function ZoneBar({ zone, busy, locked, note, onRun }) {
+  /** 한 번 더 묻는 중이면 { closing } — 할 일은 물을 때 정해 둔다(묻는 사이 상태가 바뀌어도 뒤집히지 않게). */
+  const [asking, setAsking] = useState(null)
   const done = zone.done ?? 0
   const since = zone.resetAt ? ` · ${timeOf(zone.resetAt)} 초기화` : ""
   // 결과 한 줄은 그 결과가 아직 맞을 때만. 다른 기기가 상태를 바꿨으면 감춘다.
@@ -329,6 +330,34 @@ function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
     </p>
   ) : null
 
+  if (asking) {
+    return (
+      <>
+        <div className="zone zone--ask" role="status">
+          <span>{zoneQuestion(asking.closing, zone.waiting ?? 0)}</span>
+          <span className="zone__acts">
+            <button className="ask__no" type="button" onClick={() => setAsking(null)}>
+              아니요
+            </button>
+            <button
+              className={asking.closing ? "zone__close" : "zone__open"}
+              type="button"
+              disabled={locked}
+              onClick={() => {
+                const closing = asking.closing
+                setAsking(null)
+                onRun(closing)
+              }}
+            >
+              {asking.closing ? "마감" : "마감해제"}
+            </button>
+          </span>
+        </div>
+        {line}
+      </>
+    )
+  }
+
   if (zone.closed) {
     return (
       <>
@@ -337,7 +366,7 @@ function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
             <b>마감됨</b>
             {zone.closedAt ? ` · ${timeOf(zone.closedAt)}` : ""}
           </span>
-          <button className="zone__open" type="button" disabled={locked} onClick={onReopen}>
+          <button className="zone__open" type="button" disabled={locked} onClick={() => setAsking({ closing: false })}>
             {busy ? "처리 중" : "마감해제"}
           </button>
         </div>
@@ -352,7 +381,7 @@ function ZoneBar({ zone, busy, locked, note, onClose, onReopen }) {
         <span>
           <b>예약 받는 중</b> · 완료 {done}팀{since}
         </span>
-        <button className="zone__close" type="button" disabled={locked} onClick={onClose}>
+        <button className="zone__close" type="button" disabled={locked} onClick={() => setAsking({ closing: true })}>
           {busy ? "처리 중" : "마감"}
         </button>
       </div>

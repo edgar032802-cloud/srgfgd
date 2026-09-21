@@ -113,10 +113,14 @@ img {
   max-width: 100%;
 }
 
+/* touch-action: manipulation — 휴대폰에서 버튼을 빠르게 두 번 누르면 브라우저가 "두 번
+   눌러 확대"로 가로채 두 번째 누름이 버튼에 닿지 않는다. 확대 제스처만 끄고(두 손가락
+   확대는 그대로) 누름은 곧바로 버튼에 간다. */
 button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 a {

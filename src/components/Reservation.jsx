@@ -68,6 +68,11 @@ export default function Reservation({ activity, title }) {
   const [cancelled, setCancelled] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState("")
+  /**
+   * "예약을 취소할까요?"를 그 자리에서 묻는 중. 브라우저 확인 창은 쓰지 않는다 — 휴대폰
+   * 브라우저는 확인 창이 몇 번 이어지면 막아 버려, 새로고침 전까지 버튼이 먹지 않았다.
+   */
+  const [askCancel, setAskCancel] = useState(false)
   const [closedMessage, setClosedMessage] = useState(CLOSED_FALLBACK)
   const idRef = useRef(readBookings()[activity] ?? null)
   /** 지금 화면에 붙잡고 있는 예약의 id. 다른 예약으로 바뀌었는지 가리는 데 쓴다. */
@@ -103,6 +108,7 @@ export default function Reservation({ activity, title }) {
     if (mineIdRef.current !== r.id) {
       setCancelError("")
       setCancelled(false)
+      setAskCancel(false)
     }
     mineIdRef.current = r.id
     setMine(r)
@@ -114,6 +120,7 @@ export default function Reservation({ activity, title }) {
     setMine(null)
     setNotice(null)
     setCancelError("")
+    setAskCancel(false)
   }, [])
 
   const refresh = useCallback(async () => {
@@ -256,7 +263,7 @@ export default function Reservation({ activity, title }) {
     const id = mine.id
     const key = keyOf(id)
     if (!key) return
-    if (!window.confirm("예약을 취소할까요?\n대기 순서가 사라지고 되돌릴 수 없어요.")) return
+    setAskCancel(false)
     setCancelling(true)
     setCancelError("")
     holdReload(15000)
@@ -330,6 +337,12 @@ export default function Reservation({ activity, title }) {
           canCancel={Boolean(keyOf(mine.id))}
           cancelling={cancelling}
           cancelError={cancelError}
+          asking={askCancel}
+          onAsk={() => {
+            setCancelError("")
+            setAskCancel(true)
+          }}
+          onKeep={() => setAskCancel(false)}
           onCancel={cancelMine}
         />
       ) : !loaded ? (
@@ -412,7 +425,7 @@ export default function Reservation({ activity, title }) {
  * 차례가 되면 숫자 대신 "지금 입장해주세요"가 주인공이 된다.
  * 취소 버튼은 예약한 그 기기에만 나온다(취소 열쇠가 그 기기에만 있다).
  */
-function Standing({ mine, notice, title, canCancel, cancelling, cancelError, onCancel }) {
+function Standing({ mine, notice, title, canCancel, cancelling, cancelError, asking, onAsk, onKeep, onCancel }) {
   // 순서를 모를 때(null)는 0 으로 치지 않는다. 0 으로 치면 "지금 입장해주세요"가
   // 뜨는데, 그건 차례가 온 사람에게만 해야 하는 말이다.
   const ahead = typeof mine.ahead === "number" ? mine.ahead : null
@@ -448,11 +461,23 @@ function Standing({ mine, notice, title, canCancel, cancelling, cancelError, onC
           {cancelError}
         </p>
       ) : null}
-      {canCancel ? (
-        <button className="standing__cancel" type="button" disabled={cancelling} onClick={onCancel}>
+      {!canCancel ? null : asking ? (
+        <div className="standing__ask" role="status">
+          <p>예약을 취소할까요? 대기 순서가 사라져요.</p>
+          <div>
+            <button className="ask__no" type="button" onClick={onKeep}>
+              아니요
+            </button>
+            <button className="standing__yes" type="button" onClick={onCancel}>
+              취소하기
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="standing__cancel" type="button" disabled={cancelling} onClick={onAsk}>
           {cancelling ? "취소하는 중" : "예약 취소"}
         </button>
-      ) : null}
+      )}
     </div>
   )
 }

@@ -467,6 +467,8 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
+  /* 빠르게 다섯 번 누르는 자리 — "두 번 눌러 확대"가 누름을 삼키지 않게 */
+  touch-action: manipulation;
 }
 
 .footer__brand strong {

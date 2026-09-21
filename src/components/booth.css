@@ -283,6 +283,55 @@
   color: var(--ink);
 }
 
+/* ------------------------------------------------------------- 되묻기 */
+
+/* 브라우저 확인 창 대신 그 자리에서 한 번 더 묻는다(확인 창은 휴대폰이 막아 버린다).
+   "아니요"는 가볍게, 실제 동작 버튼은 원래 버튼과 같은 모양으로. */
+.ask__no {
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.standing__ask {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  margin-top: 6px;
+}
+
+.standing__ask p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  word-break: keep-all;
+}
+
+.standing__ask div {
+  display: flex;
+  gap: 8px;
+}
+
+.standing__yes {
+  height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--ink);
+  color: var(--ink-inv);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 /* ------------------------------------------------------------ 비밀번호 창 */
 
 .lock {
@@ -379,6 +428,27 @@
 
 .lockzone.is-closed {
   background: #fbeee9;
+}
+
+/* 묻는 중인 줄 — 물음이 한 줄을 다 쓰고, 버튼 둘은 그 밑 오른쪽. */
+.lockzone.is-asking {
+  flex-wrap: wrap;
+  padding: 12px 10px 10px 16px;
+  background: var(--reel);
+}
+
+.lockzone__ask {
+  flex: 1 1 100%;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  word-break: keep-all;
+}
+
+.lockzone__acts {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .lockzone__info {
@@ -833,6 +903,18 @@
 .zone__open:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* 마감·해제를 한 번 더 묻는 중. */
+.zone--ask {
+  background: var(--reel);
+  color: var(--ink);
+}
+
+.zone__acts {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .admin__empty {
