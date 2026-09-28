@@ -247,62 +247,6 @@
   cursor: default;
 }
 
-/* ------------------------------------------------- 활동 페이지 공용: 태그 · 근거 목록 */
-
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 22px;
-}
-
-.tags li {
-  border-radius: var(--r-btn);
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 10px;
-  border-radius: var(--r);
-  background: var(--fill);
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink-2);
-}
-
-/* 한 열짜리 편집 목록: 레일 120 + 본문. 3열·번호 없음. */
-.notes {
-  border-top: 1px solid var(--line-soft);
-}
-
-.note-row {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 24px;
-  padding: 22px 0;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.note-row__rail {
-  padding-top: 3px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--ink-2);
-}
-
-.note-row h3 {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.note-row p {
-  margin-top: 6px;
-  max-width: 560px;
-  font-size: 12px;
-  line-height: 1.8;
-  color: var(--ink-2);
-  word-break: keep-all;
-}
-
 /* ----------------------------------------------------------------- model */
 
 .model {
@@ -783,12 +727,6 @@
     line-height: 1.3;
   }
 
-  .note-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-    padding: 18px 0;
-  }
-
   .model {
     padding: 88px 0 100px;
   }
@@ -969,35 +907,9 @@
   color: var(--ink-2);
 }
 
-.activity__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
-  gap: 56px;
-  align-items: start;
-  margin-top: 32px;
-}
-
-.activity__figure img {
-  width: 100%;
-  height: auto;
-  max-width: 320px;
-  margin-left: auto;
-  aspect-ratio: 520 / 550;
-}
-
 @media (max-width: 1000px) {
   .tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .activity__body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 32px;
-  }
-
-  .activity__figure img {
-    max-width: 240px;
-    margin-inline: auto;
   }
 }
 

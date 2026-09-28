@@ -1,14 +1,5 @@
 import Reservation from "../components/Reservation.jsx"
 
-const TAGS = ["눈-손 협응", "미세운동", "시지각", "촉각"]
-
-/** 대상·활동·환경. 사용자가 준 근거를 한 줄씩으로만 남긴다. */
-const CLAY_NOTES = [
-  ["대상", "감각 예민 유형", "자극을 쉽게 인식하지만 스스로 피하지는 못합니다."],
-  ["활동", "클레이 조형", "손과 눈을 계속 쓰며 하나의 과제에 머무릅니다."],
-  ["환경", "안정적인 감각 경험", "회피하지 않고 마주하도록 하는 중재 개념입니다."],
-]
-
 /**
  * 활동 페이지 한 벌의 껍데기. 감각 유형 · 제목 · 본문, 그리고 맨 아래 체험 예약.
  *
@@ -60,35 +51,10 @@ export function SenseAvoid() {
   )
 }
 
-/** 감각예민 — 홈에 있던 클레이 섹션의 내용이 이 페이지로 옮겨 왔다. */
 export function SenseSensitive() {
   return (
     <ActivityShell id="sensitive" label="감각예민" title="클레이로 아큐 테리 만들기">
-      <div className="activity__body">
-        <div>
-          <ul className="tags" aria-label="활동 요소">
-            {TAGS.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
-          </ul>
-
-          <ul className="notes">
-            {CLAY_NOTES.map(([rail, heading, body]) => (
-              <li className="note-row" key={rail}>
-                <span className="note-row__rail">{rail}</span>
-                <div>
-                  <h2>{heading}</h2>
-                  <p>{body}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <figure className="activity__figure">
-          <img src="/char/terry-sit.png" alt="클레이로 만든 테리" loading="lazy" width="520" height="550" />
-        </figure>
-      </div>
+      <Pending />
     </ActivityShell>
   )
 }
