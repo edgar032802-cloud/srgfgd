@@ -45,3 +45,5 @@ npm run test:booth   # 체험 예약 규칙·문자 경로·장면별 문자·�
 ## 만든 것
 
 Vite · React 19 · three.js(@react-three/fiber) · Express · Canvas 2D
+
+배포 업데이트 확인 - 2026.10.21
